@@ -1,0 +1,25 @@
+[package]
+name = "lihttpto"
+version = "0.1.0"
+
+[lib]
+name = "lihttpto"
+module = "lihttpto"
+archive = "lihttpto"
+
+[[test]]
+name = "lihttpto-tests"
+sources = ["tests/main.cpp", "tests/request_line.cpp", "tests/request_head.cpp", "tests/request_body.cpp", "tests/response.cpp", "tests/connection.cpp", "tests/request_target.cpp", "tests/server.cpp"]
+link-stdlib = false
+
+[profile.base]
+exceptions = false
+rtti = false
+
+[dependencies]
+rstd-parse = { version = "0.1.1", pub = true }
+rstd-std = { version = "0.1.1", pub = true }
+
+[dev-dependencies]
+rstd-test = { version = "0.1.1" }
+rstd-nostd = { version = "0.1.1", usage = "link" }
