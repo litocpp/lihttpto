@@ -144,3 +144,28 @@ TEST(Response, TcpLoopbackGetAndHead) {
         EXPECT_TRUE(**result);
     }
 }
+
+TEST(Response, StreamingUsesSharedValidationAndCloseDelimitedFraming) {
+    StreamResponseHead response;
+    response.headers.push(header("Content-Type"_str, "application/octet-stream"_str));
+    for (auto version : array<Version, 2> { Version::Http10, Version::Http11 }) {
+        auto encoded = encode_response_head(response, "GET"_str, version);
+        ASSERT_TRUE(encoded.is_ok());
+        auto text = rstd::str_::from_utf8(encoded->as_slice()).unwrap();
+        EXPECT_TRUE(text.contains("Connection: close\r\n\r\n"_str));
+        EXPECT_FALSE(text.contains("Content-Length:"_str));
+        EXPECT_FALSE(text.contains("Transfer-Encoding:"_str));
+    }
+    response.headers.push(header("Content-Length"_str, "123"_str));
+    EXPECT_EQ(encode_response_head(response, "GET"_str, Version::Http11).unwrap_err(),
+              ResponseError::ReservedHeader);
+    StreamResponseHead invalid;
+    invalid.headers.push(header("X-Test"_str, "x\r\ninjected"_str));
+    EXPECT_EQ(encode_response_head(invalid, "GET"_str, Version::Http11).unwrap_err(),
+              ResponseError::InvalidHeader);
+    StreamResponseHead reset;
+    reset.status = u16(205);
+    auto encoded = encode_response_head(reset, "GET"_str, Version::Http11).unwrap();
+    EXPECT_TRUE(
+        rstd::str_::from_utf8(encoded.as_slice()).unwrap().contains("Content-Length: 0"_str));
+}

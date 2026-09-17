@@ -356,3 +356,75 @@ auto typed_target(rstd::net::TcpStream server, rstd::net::TcpStream& client)
 TEST(Connection, ConsumesTypedTargetWithoutReparsing) {
     check(typed_target);
 }
+
+namespace
+{
+auto streaming(rstd::net::TcpStream server, rstd::net::TcpStream& client)
+    -> rstd::async::coro<bool> {
+    Connection         connection(rstd::move(server));
+    StreamResponseHead response;
+    auto               bytes = rstd::bytes::Bytes::copy_from_slice("abc"_str.as_bytes());
+    if ((co_await connection.begin_response(response)).is_ok() ||
+        (co_await connection.write_body(bytes)).is_ok() || connection.finish_response().is_ok())
+        co_return false;
+    if (! (co_await send(client, "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 1\r\n\r\nx"_str)))
+        co_return false;
+    auto request = co_await connection.read_request();
+    if (request.is_err() || request->is_none()) co_return false;
+    if ((co_await connection.begin_response(response)).is_ok()) co_return false;
+    for (;;) {
+        auto part = co_await connection.read_body();
+        if (part.is_err()) co_return false;
+        if (part->is_none()) break;
+    }
+    if ((co_await connection.begin_response(response)).is_err()) co_return false;
+    if (! (co_await receive(client, "HTTP/1.1 200 \r\nConnection: close\r\n\r\n"_str)))
+        co_return false;
+    Response complete;
+    if (connection.ready_for_request() || (co_await connection.read_request()).is_ok() ||
+        (co_await connection.respond(complete)).is_ok() ||
+        (co_await connection.begin_response(response)).is_ok())
+        co_return false;
+    for (usize i {}; i < usize(3); ++i) {
+        if ((co_await connection.write_body(bytes)).is_err()) co_return false;
+        if (! (co_await receive(client, "abc"_str))) co_return false;
+    }
+    if (connection.finish_response().is_err() || ! connection.is_closed()) co_return false;
+    auto tail = rstd::bytes::BytesMut::with_capacity(usize(1));
+    auto eof  = co_await rstd::async::io::read(client, tail);
+    co_return eof.is_ok() && *eof == usize() && (co_await connection.write_body(bytes)).is_err() &&
+        connection.finish_response().is_err();
+}
+auto streaming_body_rules(rstd::net::TcpStream  server,
+                          rstd::net::TcpStream& client,
+                          ref<str>              method,
+                          u16                   status) -> rstd::async::coro<bool> {
+    Connection connection(rstd::move(server));
+    if (! (co_await send(client, method)) ||
+        ! (co_await send(client, " / HTTP/1.1\r\nHost: x\r\n\r\n"_str)))
+        co_return false;
+    auto request = co_await connection.read_request();
+    if (request.is_err() || request->is_none()) co_return false;
+    StreamResponseHead response;
+    response.status = status;
+    if ((co_await connection.begin_response(response)).is_err()) co_return false;
+    auto bytes   = rstd::bytes::Bytes::copy_from_slice("forbidden"_str.as_bytes());
+    auto written = co_await connection.write_body(bytes);
+    co_return written.is_err() && written.unwrap_err().response.is_some() &&
+        *written.unwrap_err().response == ResponseError::InvalidBody&& connection.is_closed();
+}
+} // namespace
+
+TEST(Connection, StreamsMultiplePartsThenCloses) {
+    check(streaming);
+}
+TEST(Connection, StreamRejectsBodyForHeadAndNoContentStatuses) {
+    for (auto status : array<u16, 3> { u16(204), u16(205), u16(304) }) {
+        check([status](auto server, auto& client) {
+            return streaming_body_rules(rstd::move(server), client, "GET"_str, status);
+        });
+    }
+    check([](auto server, auto& client) {
+        return streaming_body_rules(rstd::move(server), client, "HEAD"_str, u16(200));
+    });
+}

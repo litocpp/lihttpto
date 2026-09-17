@@ -66,6 +66,7 @@ class Connection {
         ReadingBody,
         Ready,
         Writing,
+        Streaming,
         Closed
     };
     State                        state_ { State::Idle };
@@ -77,6 +78,8 @@ class Connection {
     Version                                       version_ { Version::Http11 };
     bool                                          keep_alive_ {};
     bool                                          continue_pending_ {};
+    bool                                          stream_body_allowed_ {};
+    rstd::time::Instant                           stream_started_ { rstd::time::Instant::now() };
     usize                                         requests_ {};
     rstd::time::Instant                           body_started_ { rstd::time::Instant::now() };
 
@@ -273,6 +276,49 @@ public:
             close();
         operation.complete = true;
         co_return Ok(empty {});
+    }
+
+    // Streamed responses are close-delimited and cannot reuse the connection.
+    auto begin_response(const StreamResponseHead& response)
+        -> rstd::async::coro<Result<empty, ConnectionError>> {
+        if (state_ != State::Ready) co_return Err(connection_error(ConnectionErrorKind::State));
+        auto head = encode_response_head(response, method_.as_str(), version_);
+        if (head.is_err())
+            co_return Err(response_error(ResponseWriteError { head.unwrap_err(), None() }));
+        state_ = State::Writing;
+        Operation operation { *this };
+        stream_started_ = rstd::time::Instant::now();
+        rstd_co_try(
+            co_await write_with_deadline(*stream_, *head, stream_started_, limits_.write_timeout),
+            response_error);
+        stream_body_allowed_ = ! omit_response_body(response.status, method_.as_str());
+        body_                = None();
+        state_               = State::Streaming;
+        operation.complete   = true;
+        co_return Ok(empty {});
+    }
+
+    auto write_body(const rstd::bytes::Bytes& bytes)
+        -> rstd::async::coro<Result<empty, ConnectionError>> {
+        if (state_ != State::Streaming) co_return Err(connection_error(ConnectionErrorKind::State));
+        state_ = State::Writing;
+        Operation operation { *this };
+        if (! stream_body_allowed_ && ! bytes.is_empty())
+            co_return Err(
+                response_error(ResponseWriteError { ResponseError::InvalidBody, None() }));
+        if (! bytes.is_empty())
+            rstd_co_try(co_await write_with_deadline(
+                            *stream_, bytes, stream_started_, limits_.write_timeout),
+                        response_error);
+        state_             = State::Streaming;
+        operation.complete = true;
+        co_return Ok(empty {});
+    }
+
+    auto finish_response() -> Result<empty, ConnectionError> {
+        if (state_ != State::Streaming) return Err(connection_error(ConnectionErrorKind::State));
+        close();
+        return Ok(empty {});
     }
 
     auto reject(const Response& response) -> rstd::async::coro<Result<empty, ConnectionError>> {

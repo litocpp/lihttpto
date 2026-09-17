@@ -15,6 +15,10 @@ struct Response {
     Vec<Header>        headers;
     rstd::bytes::Bytes body;
 };
+struct StreamResponseHead {
+    u16         status { 200 };
+    Vec<Header> headers;
+};
 enum class ResponseError
 {
     InvalidStatus,
@@ -72,29 +76,30 @@ auto write_with_deadline(rstd::net::TcpStream&     stream,
 }
 } // namespace lihttpto
 
-export namespace lihttpto
+namespace lihttpto
 {
-auto encode_response_head(const Response& response,
-                          ref<str>        request_method,
-                          Version         version,
-                          bool            keep_alive = false,
-                          usize limit = usize(65536)) -> Result<rstd::bytes::Bytes, ResponseError> {
-    if (response.status < u16(200) || response.status > u16(599) ||
-        (request_method == "CONNECT"_str && response.status < u16(300)))
+auto encode_response_metadata(u16           status,
+                              slice<Header> headers,
+                              Option<u64>   length,
+                              ref<str>      request_method,
+                              Version       version,
+                              bool          keep_alive = false,
+                              usize         limit      = usize(65536))
+    -> Result<rstd::bytes::Bytes, ResponseError> {
+    if (status < u16(200) || status > u16(599) ||
+        (request_method == "CONNECT"_str && status < u16(300)))
         return Err(ResponseError::InvalidStatus);
-    if ((response.status == u16(204) || response.status == u16(205) ||
-         response.status == u16(304)) &&
-        ! response.body.is_empty())
+    if ((status == u16(204) || status == u16(205) || status == u16(304)) && length.is_some() &&
+        *length != u64())
         return Err(ResponseError::InvalidBody);
     Vec<u8> output;
     auto    append = [&](ref<str> value) {
         return append_bytes(output, value.as_bytes(), limit);
     };
     if (! append(version == Version::Http11 ? "HTTP/1.1 "_str : "HTTP/1.0 "_str) ||
-        ! append_decimal(output, u64(response.status.to_primitive()), limit) ||
-        ! append(" \r\n"_str))
+        ! append_decimal(output, u64(status.to_primitive()), limit) || ! append(" \r\n"_str))
         return Err(ResponseError::TooLarge);
-    for (const auto& header : response.headers) {
+    for (const auto& header : headers) {
         auto                    name = header.name.as_str();
         rstd::parse::TextCursor cursor(rstd::parse::text_input(name));
         if (rstd::parse::consume_while_one(cursor, token_byte).is_none() || ! cursor.is_eof())
@@ -111,9 +116,9 @@ auto encode_response_head(const Response& response,
             ! append_bytes(output, header.value.as_slice(), limit) || ! append("\r\n"_str))
             return Err(ResponseError::TooLarge);
     }
-    if (response.status != u16(204) && response.status != u16(304)) {
+    if (status != u16(204) && status != u16(304) && (length.is_some() || status == u16(205))) {
         if (! append("Content-Length: "_str) ||
-            ! append_decimal(output, u64(response.body.len().to_primitive()), limit) ||
+            ! append_decimal(output, length.is_some() ? *length : u64(), limit) ||
             ! append("\r\n"_str))
             return Err(ResponseError::TooLarge);
     }
@@ -121,6 +126,36 @@ auto encode_response_head(const Response& response,
                             : "Connection: close\r\n\r\n"_str))
         return Err(ResponseError::TooLarge);
     return Ok(rstd::bytes::Bytes::copy_from_slice(output.as_slice()));
+}
+} // namespace lihttpto
+
+export namespace lihttpto
+{
+auto encode_response_head(const Response& response,
+                          ref<str>        request_method,
+                          Version         version,
+                          bool            keep_alive = false,
+                          usize limit = usize(65536)) -> Result<rstd::bytes::Bytes, ResponseError> {
+    return encode_response_metadata(response.status,
+                                    response.headers.as_slice(),
+                                    Some(u64(response.body.len().to_primitive())),
+                                    request_method,
+                                    version,
+                                    keep_alive,
+                                    limit);
+}
+
+auto encode_response_head(const StreamResponseHead& response,
+                          ref<str>                  request_method,
+                          Version                   version,
+                          usize limit = usize(65536)) -> Result<rstd::bytes::Bytes, ResponseError> {
+    return encode_response_metadata(response.status,
+                                    response.headers.as_slice(),
+                                    None(),
+                                    request_method,
+                                    version,
+                                    false,
+                                    limit);
 }
 
 auto write_response(rstd::net::TcpStream& stream,
