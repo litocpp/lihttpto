@@ -250,7 +250,7 @@ public:
         }
     }
 
-    auto take_trailers() -> Option<Vec<Header>> {
+    auto take_trailers() -> Option<Headers> {
         if (state_ != State::Ready) return None();
         return (*body_)->take_trailers();
     }

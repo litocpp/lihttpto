@@ -1,4 +1,5 @@
 export module lihttpto;
+export import :header;
 export import :request_line;
 export import :request_head;
 export import :request_body;

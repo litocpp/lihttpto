@@ -12,12 +12,12 @@ export namespace lihttpto
 {
 struct Response {
     u16                status { 200 };
-    Vec<Header>        headers;
+    Headers            headers;
     rstd::bytes::Bytes body;
 };
 struct StreamResponseHead {
-    u16         status { 200 };
-    Vec<Header> headers;
+    u16     status { 200 };
+    Headers headers;
 };
 enum class ResponseError
 {
@@ -78,6 +78,28 @@ auto write_with_deadline(rstd::net::TcpStream&     stream,
 
 namespace lihttpto
 {
+auto validate_response_metadata(u16           status,
+                                slice<Header> headers,
+                                Option<u64>   length,
+                                ref<str>      request_method) -> Result<empty, ResponseError> {
+    if (status < u16(200) || status > u16(599) ||
+        (request_method == "CONNECT"_str && status < u16(300)))
+        return Err(ResponseError::InvalidStatus);
+    if ((status == u16(204) || status == u16(205) || status == u16(304)) && length.is_some() &&
+        *length != u64())
+        return Err(ResponseError::InvalidBody);
+    for (const auto& header : headers) {
+        if (header.name.matches("content-length"_str) ||
+            header.name.matches("transfer-encoding"_str) || header.name.matches("connection"_str) ||
+            header.name.matches("trailer"_str))
+            return Err(ResponseError::ReservedHeader);
+    }
+    return Ok(empty {});
+}
+} // namespace lihttpto
+
+namespace lihttpto
+{
 auto encode_response_metadata(u16           status,
                               slice<Header> headers,
                               Option<u64>   length,
@@ -86,12 +108,7 @@ auto encode_response_metadata(u16           status,
                               bool          keep_alive = false,
                               usize         limit      = usize(65536))
     -> Result<rstd::bytes::Bytes, ResponseError> {
-    if (status < u16(200) || status > u16(599) ||
-        (request_method == "CONNECT"_str && status < u16(300)))
-        return Err(ResponseError::InvalidStatus);
-    if ((status == u16(204) || status == u16(205) || status == u16(304)) && length.is_some() &&
-        *length != u64())
-        return Err(ResponseError::InvalidBody);
+    rstd_try(validate_response_metadata(status, headers, length, request_method));
     Vec<u8> output;
     auto    append = [&](ref<str> value) {
         return append_bytes(output, value.as_bytes(), limit);
@@ -100,18 +117,7 @@ auto encode_response_metadata(u16           status,
         ! append_decimal(output, u64(status.to_primitive()), limit) || ! append(" \r\n"_str))
         return Err(ResponseError::TooLarge);
     for (const auto& header : headers) {
-        auto                    name = header.name.as_str();
-        rstd::parse::TextCursor cursor(rstd::parse::text_input(name));
-        if (rstd::parse::consume_while_one(cursor, token_byte).is_none() || ! cursor.is_eof())
-            return Err(ResponseError::InvalidHeader);
-        if (ascii_equal(name.as_bytes(), "content-length"_str) ||
-            ascii_equal(name.as_bytes(), "transfer-encoding"_str) ||
-            ascii_equal(name.as_bytes(), "connection"_str) ||
-            ascii_equal(name.as_bytes(), "trailer"_str))
-            return Err(ResponseError::ReservedHeader);
-        for (auto byte : header.value.as_slice())
-            if (! (byte == u8('\t') || (byte >= u8(32) && byte != u8(127))))
-                return Err(ResponseError::InvalidHeader);
+        auto name = header.name.as_str();
         if (! append(name) || ! append(": "_str) ||
             ! append_bytes(output, header.value.as_slice(), limit) || ! append("\r\n"_str))
             return Err(ResponseError::TooLarge);
@@ -131,6 +137,12 @@ auto encode_response_metadata(u16           status,
 
 export namespace lihttpto
 {
+auto validate_response_head(const StreamResponseHead& response, ref<str> request_method)
+    -> Result<empty, ResponseError> {
+    return validate_response_metadata(
+        response.status, response.headers.as_slice(), None(), request_method);
+}
+
 auto encode_response_head(const Response& response,
                           ref<str>        request_method,
                           Version         version,

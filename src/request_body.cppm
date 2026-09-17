@@ -104,7 +104,7 @@ class RequestBodyDecoder {
     usize          metadata_ {};
     CrlfLineReader size_line_;
     CrlfLineReader trailer_line_;
-    Vec<Header>    trailers_;
+    Headers        trailers_;
     bool           trailers_taken_ { false };
     DecodeError    error_ { DecodeError::InvalidState };
 
@@ -205,7 +205,7 @@ public:
         return Ok(DecodeStatus::Complete);
     }
 
-    auto take_trailers() -> Option<Vec<Header>> {
+    auto take_trailers() -> Option<Headers> {
         if (state_ != State::Complete || trailers_taken_) return None();
         trailers_taken_ = true;
         return Some(rstd::move(trailers_));

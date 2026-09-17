@@ -9,7 +9,7 @@ archive = "lihttpto"
 
 [[test]]
 name = "lihttpto-tests"
-sources = ["tests/main.cpp", "tests/request_line.cpp", "tests/request_head.cpp", "tests/request_body.cpp", "tests/response.cpp", "tests/connection.cpp", "tests/request_target.cpp", "tests/server.cpp"]
+sources = ["tests/main.cpp", "tests/header.cpp", "tests/request_line.cpp", "tests/request_head.cpp", "tests/request_body.cpp", "tests/response.cpp", "tests/connection.cpp", "tests/request_target.cpp", "tests/server.cpp"]
 link-stdlib = false
 
 [profile.base]

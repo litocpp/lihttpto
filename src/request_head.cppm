@@ -1,5 +1,6 @@
 export module lihttpto:request_head;
 export import :request_line;
+export import :header;
 
 import rstd;
 using namespace rstd::prelude;
@@ -7,10 +8,6 @@ using namespace rstd::literals;
 
 export namespace lihttpto
 {
-struct Header {
-    String  name;
-    Vec<u8> value;
-};
 enum class BodyKind
 {
     None,
@@ -29,7 +26,7 @@ struct HeadLimits {
 };
 struct RequestHead {
     RequestLine       line;
-    Vec<Header>       headers;
+    Headers           headers;
     BodyFraming       body;
     bool              keep_alive;
     Option<Authority> authority;
@@ -43,21 +40,9 @@ auto ows(u8 byte) -> bool {
 }
 
 auto parse_header(slice<u8> bytes) -> Result<Header, DecodeError> {
-    rstd::parse::TextCursor cursor { rstd::parse::Input<u8>(bytes) };
-    auto                    name = rstd::parse::consume_while_one(cursor, token_byte);
-    if (name.is_none() || rstd::parse::consume_literal(cursor, ":"_str).is_none())
-        return Err(DecodeError::InvalidHeader);
-    (void)rstd::parse::consume_while(cursor, ows);
-    auto start = cursor.position();
-    auto value = rstd::parse::consume_while(cursor, [](u8 byte) {
-        return byte == u8('\t') || (byte >= u8(32) && byte != u8(127));
-    });
-    if (! cursor.is_eof()) return Err(DecodeError::InvalidHeader);
-    auto end = value.end;
-    while (end > start && ows(bytes[end - usize(1)])) --end;
-    Vec<u8> owned;
-    for (usize index = start; index < end; ++index) owned.push(u8(bytes[index]));
-    return Ok(Header { String::make(cursor.text(*name).unwrap()), rstd::move(owned) });
+    auto parsed = Header::parse_line(bytes);
+    if (parsed.is_err()) return Err(DecodeError::InvalidHeader);
+    return Ok(rstd::move(parsed).unwrap());
 }
 
 auto parse_length(slice<u8> bytes) -> Result<u64, DecodeError> {
@@ -91,7 +76,7 @@ auto parse_connection(slice<u8> bytes, bool& close, bool& persistent) -> bool {
     return true;
 }
 
-auto finish_head(RequestLine line, Vec<Header> headers) -> Result<RequestHead, DecodeError> {
+auto finish_head(RequestLine line, Headers headers) -> Result<RequestHead, DecodeError> {
     bool              host       = false;
     bool              transfer   = false;
     bool              close      = false;
@@ -157,7 +142,7 @@ class RequestHeadDecoder {
     RequestLineDecoder  request_line_;
     CrlfLineReader      header_line_;
     Option<RequestLine> line_;
-    Vec<Header>         headers_;
+    Headers             headers_;
     Option<RequestHead> head_;
     DecodeError         error_ { DecodeError::InvalidState };
 

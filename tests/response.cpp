@@ -8,9 +8,7 @@ using namespace lihttpto;
 namespace
 {
 auto header(ref<str> name, ref<str> value) -> Header {
-    Vec<u8> bytes;
-    for (auto byte : value.bytes()) bytes.push(u8(byte));
-    return Header { String::make(name), rstd::move(bytes) };
+    return Header::make(name, value.as_bytes()).unwrap();
 }
 auto make_response() -> Response {
     Response response;
@@ -99,10 +97,9 @@ TEST(Response, RejectsInjectionAndUserFraming) {
         EXPECT_EQ(encode_response_head(response, "GET"_str, Version::Http11).unwrap_err(),
                   ResponseError::ReservedHeader);
     }
-    auto response = make_response();
-    response.headers.push(header("X"_str, "safe\r\nBad: injected"_str));
-    EXPECT_EQ(encode_response_head(response, "GET"_str, Version::Http11).unwrap_err(),
-              ResponseError::InvalidHeader);
+    EXPECT_TRUE(Header::make("X"_str, "safe\r\nBad: injected"_str.as_bytes())
+                    .unwrap_err()
+                    .is_InvalidValue());
 }
 
 TEST(Response, SpecialStatusBodyRules) {
@@ -159,10 +156,8 @@ TEST(Response, StreamingUsesSharedValidationAndCloseDelimitedFraming) {
     response.headers.push(header("Content-Length"_str, "123"_str));
     EXPECT_EQ(encode_response_head(response, "GET"_str, Version::Http11).unwrap_err(),
               ResponseError::ReservedHeader);
-    StreamResponseHead invalid;
-    invalid.headers.push(header("X-Test"_str, "x\r\ninjected"_str));
-    EXPECT_EQ(encode_response_head(invalid, "GET"_str, Version::Http11).unwrap_err(),
-              ResponseError::InvalidHeader);
+    EXPECT_TRUE(
+        Header::make("X-Test"_str, "x\r\ninjected"_str.as_bytes()).unwrap_err().is_InvalidValue());
     StreamResponseHead reset;
     reset.status = u16(205);
     auto encoded = encode_response_head(reset, "GET"_str, Version::Http11).unwrap();
