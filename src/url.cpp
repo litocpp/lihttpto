@@ -360,4 +360,33 @@ auto Url::clone() const -> Url {
                  port_,           path_,   query_,     fragment_ };
 }
 
+auto Url::same_http_origin(const Url& other) const -> bool {
+    struct Origin {
+        String scheme;
+        String host;
+        u16    port;
+    };
+    auto origin = [](const Url& url) -> Option<Origin> {
+        auto scheme = url.scheme();
+        auto host   = url.host();
+        if (scheme.is_none() || host.is_none() || host->is_empty()) return None();
+        auto protocol = String::make(*scheme);
+        protocol.as_mut_str().make_ascii_lowercase();
+        if (protocol != "http"_str && protocol != "https"_str) return None();
+        auto name = String::make(*host);
+        name.as_mut_str().make_ascii_lowercase();
+        auto port = protocol == "https"_str ? u16(443) : u16(80);
+        if (auto value = url.port(); value.is_some() && ! value->is_empty()) {
+            auto parsed = rstd::from_str<u16>(*value);
+            if (parsed.is_err()) return None();
+            port = parsed.unwrap();
+        }
+        return Some(Origin { rstd::move(protocol), rstd::move(name), port });
+    };
+    auto left  = origin(*this);
+    auto right = origin(other);
+    if (left.is_none() || right.is_none()) return false;
+    return left->scheme == right->scheme && left->host == right->host && left->port == right->port;
+}
+
 } // namespace lihttpto

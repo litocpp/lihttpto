@@ -60,6 +60,9 @@ public:
     auto resolve(const Url& reference) const -> Result<Url, UrlError>;
 
     [[nodiscard]]
+    auto same_http_origin(const Url& other) const -> bool;
+
+    [[nodiscard]]
     auto clone() const -> Url;
 
 private:
