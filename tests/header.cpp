@@ -64,3 +64,60 @@ TEST(Header, RequestFieldsMoveDirectlyIntoResponse) {
     EXPECT_EQ(validate_response_head(streamed, "GET"_str).unwrap_err(),
               ResponseError::ReservedHeader);
 }
+
+TEST(Header, ReplacementIsAtomicAndCloneOwnsFields) {
+    Headers headers;
+    headers.add("X-Test"_str, "first"_str).unwrap();
+    headers.add("x-test"_str, "second"_str).unwrap();
+    auto copy = headers.clone();
+    EXPECT_TRUE(headers.set("X-Test"_str, "bad\r\nvalue"_str).is_err());
+    EXPECT_EQ(headers.get_all("x-test"_str).len(), usize(2));
+    headers.set("x-test"_str, "replacement"_str).unwrap();
+    EXPECT_EQ(headers.get_unique_text("X-Test"_str).unwrap().unwrap(), "replacement"_str);
+    EXPECT_EQ(copy.get_all("x-test"_str).len(), usize(2));
+    EXPECT_EQ(copy.remove("X-Test"_str), usize(2));
+    EXPECT_TRUE(copy.is_empty());
+    EXPECT_TRUE(headers.contains("X-Test"_str));
+}
+
+TEST(Header, TransportMetadataDoesNotRelaxHttp1WireParsing) {
+    for (auto line : array<ref<str>, 2> { "HTTP/2 200\r\n\r\n"_str, "HTTP/3 204\r\n\r\n"_str }) {
+        Http1HeadParser wire;
+        EXPECT_TRUE(wire.push(line.as_bytes()).is_err());
+        Http1HeadParser metadata { true };
+        auto            parsed = metadata.push(line.as_bytes()).unwrap();
+        EXPECT_TRUE(parsed.is_Complete());
+        EXPECT_TRUE(parsed.as_Complete().head.status_code().is_some());
+    }
+}
+
+TEST(Header, ResponseHeadKeepsFieldsAndTrailersSeparate) {
+    Http1HeadParser decoder;
+    EXPECT_TRUE(decoder.push("HTTP/1.1 200 OK\r\nSet-Coo"_bytes).unwrap().is_NeedMore());
+    auto result = decoder.push("kie: a=1\r\nset-cookie: b=2\r\n\r\nbody"_bytes).unwrap();
+    ASSERT_TRUE(result.is_Complete());
+    auto& head = result.as_Complete().head;
+    EXPECT_EQ(head.status_code().unwrap(), u16(200));
+    EXPECT_EQ(head.headers().get_all("Set-Cookie"_str).len(), usize(2));
+    Http1FieldSectionParser trailers;
+    auto                    trailer = trailers.push("X-End: ok\r\n\r\n"_bytes).unwrap();
+    EXPECT_TRUE(trailer.is_Complete());
+    EXPECT_FALSE(head.headers().contains("X-End"_str));
+    auto response = rstd::move(head).into_response().unwrap();
+    EXPECT_EQ(response.status.value(), u16(200));
+    EXPECT_EQ(response.headers.get_all("Set-Cookie"_str).len(), usize(2));
+    EXPECT_EQ(response.version.unwrap().major(), u8(1));
+}
+
+TEST(Header, FailedAndFinishedDecodersCannotResume) {
+    Http1HeadParser invalid;
+    EXPECT_TRUE(invalid.push("bad\r\n"_bytes).is_err());
+    EXPECT_TRUE(invalid.push("HTTP/1.1 200 OK\r\n\r\n"_bytes).is_err());
+    Http1HeadParser truncated;
+    EXPECT_TRUE(truncated.push("HTTP/1.1 200"_bytes).unwrap().is_NeedMore());
+    EXPECT_TRUE(truncated.finish().is_err());
+    EXPECT_TRUE(truncated.push(" OK\r\n\r\n"_bytes).is_err());
+    Http1FieldSectionParser fields;
+    EXPECT_TRUE(fields.push("bad field\r\n"_bytes).is_err());
+    EXPECT_TRUE(fields.push("X: good\r\n\r\n"_bytes).is_err());
+}

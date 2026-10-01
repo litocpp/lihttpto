@@ -12,14 +12,19 @@ name = "lihttpto-tests"
 sources = ["tests/main.cpp", "tests/header.cpp", "tests/cgi.cpp", "tests/body_transfer.cpp", "tests/request_line.cpp", "tests/request_head.cpp", "tests/request_body.cpp", "tests/response.cpp", "tests/connection.cpp", "tests/request_target.cpp", "tests/server.cpp"]
 link-stdlib = false
 
+[[test]]
+name = "lihttpto-http-values-tests"
+sources = ["tests/main.cpp", "tests/http_values.cpp"]
+
 [profile.base]
 exceptions = false
 rtti = false
 
 [dependencies]
-rstd-parse = { version = "0.1.1", pub = true }
-rstd-std = { version = "0.1.1", pub = true }
+rstd-parse = { version = "0.1.2", pub = true }
+rstd-std = { version = "0.1.2", pub = true }
 
 [dev-dependencies]
-rstd-test = { version = "0.1.1" }
-rstd-nostd = { version = "0.1.1", usage = "link" }
+rstd-cppstd = { version = "0.1.2" }
+rstd-test = { version = "0.1.2" }
+rstd-nostd = { version = "0.1.2", usage = "link" }
