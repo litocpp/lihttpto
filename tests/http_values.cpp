@@ -12,6 +12,29 @@ auto as_rstd_str(std::string_view value) -> rstd::ref<rstd::str> {
     return rstd::cppstd::as_str(value).unwrap();
 }
 
+TEST(HttpValues, MessageParserByteLimits) {
+    auto head  = "HTTP/1.1 200 OK\r\nX: a\r\n\r\n"_bytes;
+    auto exact = lihttpto::Http1HeadParser { true, head.len() };
+    EXPECT_TRUE(exact.push(head)->is_Complete());
+    auto short_head = lihttpto::Http1HeadParser { true, head.len() - usize(1) };
+    auto rejected   = short_head.push(head);
+    ASSERT_TRUE(rejected.is_err());
+    EXPECT_TRUE(rejected.unwrap_err().kind().is_HeaderTooLarge());
+    auto split = lihttpto::Http1HeadParser { true, head.len() - usize(1) };
+    EXPECT_TRUE(split.push("HTTP/1.1 200 OK\r\n"_bytes)->is_NeedMore());
+    EXPECT_TRUE(split.push("X: a\r\n\r\n"_bytes).is_err());
+    auto zero = lihttpto::Http1HeadParser { true, usize() };
+    EXPECT_TRUE(zero.push(head).is_err());
+
+    auto fields       = "X: a\r\n\r\n"_bytes;
+    auto exact_fields = lihttpto::Http1FieldSectionParser { fields.len() };
+    EXPECT_TRUE(exact_fields.push(fields)->is_Complete());
+    auto short_fields    = lihttpto::Http1FieldSectionParser { fields.len() - usize(1) };
+    auto rejected_fields = short_fields.push(fields);
+    ASSERT_TRUE(rejected_fields.is_err());
+    EXPECT_TRUE(rejected_fields.unwrap_err().kind().is_HeaderTooLarge());
+}
+
 TEST(HttpValues, UrlEncoding) {
     using namespace lihttpto;
 

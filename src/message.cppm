@@ -171,8 +171,9 @@ export class Http1HeadParser {
 public:
     static constexpr usize MaxHeaderBytes { 64 * 1024 };
 
-    explicit Http1HeadParser(bool transport_metadata = false) noexcept
-        : transport_metadata_(transport_metadata) {}
+    explicit Http1HeadParser(bool  transport_metadata = false,
+                             usize max_header_bytes   = MaxHeaderBytes) noexcept
+        : transport_metadata_(transport_metadata), max_header_bytes_(max_header_bytes) {}
     Http1HeadParser(Http1HeadParser&&) noexcept                    = default;
     auto operator=(Http1HeadParser&&) noexcept -> Http1HeadParser& = default;
 
@@ -184,6 +185,7 @@ public:
 
 private:
     bool              transport_metadata_ { false };
+    usize             max_header_bytes_;
     Vec<u8>           buffer_;
     usize             line_start_ {};
     usize             scan_ {};
@@ -201,7 +203,8 @@ export class Http1FieldSectionParser {
 public:
     static constexpr usize MaxHeaderBytes = Http1HeadParser::MaxHeaderBytes;
 
-    Http1FieldSectionParser() noexcept                                             = default;
+    explicit Http1FieldSectionParser(usize max_header_bytes = MaxHeaderBytes) noexcept
+        : max_header_bytes_(max_header_bytes) {}
     Http1FieldSectionParser(Http1FieldSectionParser&&) noexcept                    = default;
     auto operator=(Http1FieldSectionParser&&) noexcept -> Http1FieldSectionParser& = default;
 
@@ -212,6 +215,7 @@ public:
     auto finish() -> Result<Headers, HttpParseError>;
 
 private:
+    usize   max_header_bytes_;
     Vec<u8> buffer_;
     usize   line_start_ {};
     usize   scan_ {};

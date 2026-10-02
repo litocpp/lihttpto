@@ -224,7 +224,7 @@ auto Http1HeadParser::push(slice<u8> input) -> rstd::Result<Http1HeadEvent, Http
         return Err(HttpParseError { HttpParseErrorKind::InvalidSyntax(), line_start_ });
     }
     failed_        = true;
-    auto available = MaxHeaderBytes - buffer_.len();
+    auto available = max_header_bytes_ - buffer_.len();
     auto count     = input.len() < available ? input.len() : available;
     buffer_.extend_from_slice(slice<u8>::from_raw_parts(input.as_raw_ptr(), count));
 
@@ -236,8 +236,8 @@ auto Http1HeadParser::push(slice<u8> input) -> rstd::Result<Http1HeadEvent, Http
         }
 
         auto line_end = scan_ + usize(2);
-        if (line_end > MaxHeaderBytes) {
-            return Err(HttpParseError { HttpParseErrorKind::HeaderTooLarge(), MaxHeaderBytes });
+        if (line_end > max_header_bytes_) {
+            return Err(HttpParseError { HttpParseErrorKind::HeaderTooLarge(), max_header_bytes_ });
         }
         auto line = slice<u8>::from_raw_parts(
             buffer_.as_slice().as_raw_ptr() + line_start_.to_primitive(), line_end - line_start_);
@@ -268,7 +268,7 @@ auto Http1HeadParser::push(slice<u8> input) -> rstd::Result<Http1HeadEvent, Http
         headers_.push(rstd::move(field).unwrap());
     }
     if (input.len() > count) {
-        return Err(HttpParseError { HttpParseErrorKind::HeaderTooLarge(), MaxHeaderBytes });
+        return Err(HttpParseError { HttpParseErrorKind::HeaderTooLarge(), max_header_bytes_ });
     }
     failed_ = false;
     return Ok(Http1HeadEvent::NeedMore());
@@ -285,7 +285,7 @@ auto Http1FieldSectionParser::push(slice<u8> input)
         return Err(HttpParseError { HttpParseErrorKind::InvalidSyntax(), line_start_ });
     }
     failed_        = true;
-    auto available = MaxHeaderBytes - buffer_.len();
+    auto available = max_header_bytes_ - buffer_.len();
     auto count     = input.len() < available ? input.len() : available;
     buffer_.extend_from_slice(slice<u8>::from_raw_parts(input.as_raw_ptr(), count));
 
@@ -297,8 +297,8 @@ auto Http1FieldSectionParser::push(slice<u8> input)
         }
 
         auto line_end = scan_ + usize(2);
-        if (line_end > MaxHeaderBytes) {
-            return Err(HttpParseError { HttpParseErrorKind::HeaderTooLarge(), MaxHeaderBytes });
+        if (line_end > max_header_bytes_) {
+            return Err(HttpParseError { HttpParseErrorKind::HeaderTooLarge(), max_header_bytes_ });
         }
         auto line = slice<u8>::from_raw_parts(
             buffer_.as_slice().as_raw_ptr() + line_start_.to_primitive(), line_end - line_start_);
@@ -319,7 +319,7 @@ auto Http1FieldSectionParser::push(slice<u8> input)
         fields_.push(rstd::move(field).unwrap());
     }
     if (input.len() > count) {
-        return Err(HttpParseError { HttpParseErrorKind::HeaderTooLarge(), MaxHeaderBytes });
+        return Err(HttpParseError { HttpParseErrorKind::HeaderTooLarge(), max_header_bytes_ });
     }
     failed_ = false;
     return Ok(Http1FieldSectionEvent::NeedMore());
