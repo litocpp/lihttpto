@@ -743,3 +743,26 @@ TEST(HttpValues, HttpErrorDisplayTraitsDescribeStableKinds) {
     EXPECT_TRUE(rstd::error::is<UrlError>(erased.as_ref()));
     EXPECT_TRUE(rstd::move(erased).downcast<UrlError>().is_ok());
 }
+TEST(MediaType, ContentTypeEssenceAndParameters) {
+    auto parsed =
+        lihttpto::MediaType::parse(" Application/JSON; charset=utf-8; note=\"a;\\\"b\" \t"_str);
+    ASSERT_TRUE(parsed.is_ok());
+    EXPECT_TRUE(parsed->matches("application"_str, "json"_str));
+    EXPECT_FALSE(parsed->matches("application"_str, "problem+json"_str));
+    ASSERT_TRUE(parsed->parameter("CHARSET"_str).is_some());
+    EXPECT_TRUE(parsed->parameter_eq_ignore_ascii_case("CHARSET"_str, "UTF-8"_str));
+    ASSERT_TRUE(parsed->parameter("note"_str).is_some());
+    EXPECT_TRUE(parsed->parameter_eq_ignore_ascii_case("note"_str, "a;\"b"_str));
+    EXPECT_TRUE(parsed->parameter("absent"_str).is_none());
+    EXPECT_TRUE(
+        lihttpto::MediaType::parse("text/plain; charset=utf-8; Charset=us-ascii"_str).is_err());
+    for (auto value : rstd::array<ref<str>, 8> { "application"_str,
+                                                 "application/"_str,
+                                                 "*/json"_str,
+                                                 "application/json, text/plain"_str,
+                                                 "application/json; charset="_str,
+                                                 "application/json; p=\"unterminated"_str,
+                                                 "application/json; p=\"bad\r\""_str,
+                                                 "application/json;"_str })
+        EXPECT_TRUE(lihttpto::MediaType::parse(value).is_err());
+}

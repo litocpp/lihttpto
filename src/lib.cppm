@@ -4,6 +4,7 @@ export import :query_params;
 export import :cookie;
 export import :message;
 export import :header;
+export import :media_type;
 export import :request_line;
 export import :request_head;
 export import :request_body;
