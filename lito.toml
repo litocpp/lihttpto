@@ -16,6 +16,16 @@ link-stdlib = false
 name = "lihttpto-http-values-tests"
 sources = ["tests/main.cpp", "tests/http_values.cpp"]
 
+[[test]]
+name = "lihttpto-event-stream-tests"
+sources = ["tests/main.cpp", "tests/event_stream.cpp"]
+link-stdlib = false
+
+[[test]]
+name = "lihttpto-url-baseline"
+sources = ["tests/main.cpp", "tests/url_baseline.cpp"]
+link-stdlib = false
+
 [profile.base]
 exceptions = false
 rtti = false
@@ -25,6 +35,7 @@ rstd-parse = { version = "0.1.2", pub = true }
 rstd-std = { version = "0.1.2", pub = true }
 
 [dev-dependencies]
+rstd-json = { version = "0.1.2" }
 rstd-cppstd = { version = "0.1.2" }
 rstd-test = { version = "0.1.2" }
 rstd-nostd = { version = "0.1.2", usage = "link" }

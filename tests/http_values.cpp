@@ -35,6 +35,20 @@ TEST(HttpValues, MessageParserByteLimits) {
     EXPECT_TRUE(rejected_fields.unwrap_err().kind().is_HeaderTooLarge());
 }
 
+TEST(HttpValues, HttpOriginSerialization) {
+    auto url    = lihttpto::Url::parse_http("HTTPS://Example.COM:443/path?q=x"_str).unwrap();
+    auto origin = url.http_origin().unwrap();
+    EXPECT_EQ(origin.authority().as_str(), "example.com"_str);
+    EXPECT_EQ(origin.serialize().as_str(), "https://example.com"_str);
+    auto same = lihttpto::Url::parse_http("https://example.com/other"_str).unwrap();
+    EXPECT_TRUE(url.same_http_origin(same));
+    auto v6 = lihttpto::Url::parse_http("http://[::1]:8080"_str).unwrap().http_origin().unwrap();
+    EXPECT_EQ(v6.authority().as_str(), "[::1]:8080"_str);
+    EXPECT_EQ(v6.serialize().as_str(), "http://[::1]:8080"_str);
+    EXPECT_TRUE(lihttpto::Url::parse("/relative"_str).is_err());
+    EXPECT_TRUE(lihttpto::Url::parse("data:text/plain,hello"_str).unwrap().http_origin().is_none());
+}
+
 TEST(HttpValues, UrlEncoding) {
     using namespace lihttpto;
 
@@ -330,17 +344,18 @@ TEST(HttpValues, UrlParsesOwnedComponentsAndTraits) {
     EXPECT_EQ(rstd::cppstd::to_string(rstd::format("{}", cloned)),
               "foo://user@example.com:8042/over/there?name=ferret#nose");
 
-    auto from_trait = rstd::from_str<Url>("../relative?"_str);
-    ASSERT_TRUE(from_trait.is_ok());
-    auto relative = rstd::move(from_trait).unwrap();
+    EXPECT_TRUE(rstd::from_str<Url>("../relative?"_str).is_err());
+    auto from_base = Url::parse("../relative?"_str, url);
+    ASSERT_TRUE(from_base.is_ok());
+    auto relative = rstd::move(from_base).unwrap();
     ASSERT_TRUE(relative.query().is_some());
     EXPECT_EQ(relative.query()->size().to_primitive(), 0u);
     EXPECT_TRUE(relative.fragment().is_none());
 
-    auto empty_fragment = Url::parse("#"_str);
+    auto empty_fragment = relative.resolve("#"_str);
     ASSERT_TRUE(empty_fragment.is_ok());
     auto empty_fragment_url = rstd::move(empty_fragment).unwrap();
-    EXPECT_TRUE(empty_fragment_url.query().is_none());
+    EXPECT_TRUE(empty_fragment_url.query().is_some());
     ASSERT_TRUE(empty_fragment_url.fragment().is_some());
     EXPECT_EQ(empty_fragment_url.fragment()->size().to_primitive(), 0u);
 
@@ -355,16 +370,12 @@ TEST(HttpValues, HttpUrlValidationReportsKindsAndOffsets) {
     using lihttpto::Url;
 
     auto invalid_percent = Url::parse("http://example.com/%zz"_str);
-    ASSERT_TRUE(invalid_percent.is_err());
-    auto percent_error = rstd::move(invalid_percent).unwrap_err();
-    EXPECT_TRUE(percent_error.kind().is_InvalidPercentEncoding());
-    EXPECT_EQ(percent_error.offset().to_primitive(), 19u);
+    ASSERT_TRUE(invalid_percent.is_ok());
+    EXPECT_EQ(rstd::cppstd::as_string_view(invalid_percent->path()), "/%zz");
 
     auto invalid_character = Url::parse("http://example.com/a b"_str);
-    ASSERT_TRUE(invalid_character.is_err());
-    auto character_error = rstd::move(invalid_character).unwrap_err();
-    EXPECT_TRUE(character_error.kind().is_InvalidCharacter());
-    EXPECT_EQ(character_error.offset().to_primitive(), 20u);
+    ASSERT_TRUE(invalid_character.is_ok());
+    EXPECT_EQ(rstd::cppstd::as_string_view(invalid_character->path()), "/a%20b");
 
     auto missing_scheme = Url::parse_http("//example.com/path"_str);
     ASSERT_TRUE(missing_scheme.is_err());
@@ -374,11 +385,11 @@ TEST(HttpValues, HttpUrlValidationReportsKindsAndOffsets) {
     ASSERT_TRUE(unsupported.is_err());
     EXPECT_TRUE(unsupported.unwrap_err().kind().is_UnsupportedScheme());
 
-    auto missing_authority = Url::parse_http("http:path"_str);
-    ASSERT_TRUE(missing_authority.is_err());
-    EXPECT_TRUE(missing_authority.unwrap_err().kind().is_MissingAuthority());
+    auto implicit_authority = Url::parse_http("http:path"_str);
+    ASSERT_TRUE(implicit_authority.is_ok());
+    EXPECT_EQ(rstd::cppstd::as_string_view(implicit_authority->as_ref()), "http://path/");
 
-    auto missing_host = Url::parse_http("http:///path"_str);
+    auto missing_host = Url::parse_http("http://?query"_str);
     ASSERT_TRUE(missing_host.is_err());
     EXPECT_TRUE(missing_host.unwrap_err().kind().is_MissingHost());
 
@@ -394,7 +405,7 @@ TEST(HttpValues, HttpUrlValidationReportsKindsAndOffsets) {
     EXPECT_EQ(rstd::cppstd::to_string(value.request_target()), "/resource?");
 }
 
-TEST(HttpValues, UrlResolvesRfc3986References) {
+TEST(HttpValues, UrlResolvesReferencesAgainstBase) {
     using lihttpto::Url;
 
     auto base_result = Url::parse("http://a/b/c/d;p?q"_str);
@@ -411,7 +422,7 @@ TEST(HttpValues, UrlResolvesRfc3986References) {
         { "./g", "http://a/b/c/g" },
         { "g/", "http://a/b/c/g/" },
         { "/g", "http://a/g" },
-        { "//g", "http://g" },
+        { "//g", "http://g/" },
         { "?y", "http://a/b/c/d;p?y" },
         { "g?y", "http://a/b/c/g?y" },
         { "#s", "http://a/b/c/d;p?q#s" },
@@ -447,20 +458,18 @@ TEST(HttpValues, UrlResolvesRfc3986References) {
         { "g?y/../x", "http://a/b/c/g?y/../x" },
         { "g#s/./x", "http://a/b/c/g#s/./x" },
         { "g#s/../x", "http://a/b/c/g#s/../x" },
-        { "http:g", "http:g" },
+        { "http:g", "http://a/b/c/g" },
     };
 
     for (auto const& example : examples) {
-        auto reference = Url::parse(as_rstd_str(example.reference));
-        ASSERT_TRUE(reference.is_ok()) << example.reference;
-        auto resolved = base.resolve(reference.unwrap());
+        auto resolved = base.resolve(as_rstd_str(example.reference));
         ASSERT_TRUE(resolved.is_ok()) << example.reference;
         EXPECT_EQ(rstd::cppstd::as_string_view(resolved.unwrap().as_ref()), example.expected)
             << example.reference;
     }
 }
 
-TEST(HttpValues, UriParserValidatesIpLiterals) {
+TEST(HttpValues, UrlValidatesIpLiterals) {
     using lihttpto::Url;
 
     constexpr const char* valid[] = {
@@ -469,7 +478,6 @@ TEST(HttpValues, UriParserValidatesIpLiterals) {
         "http://[2001:db8::1]/",
         "http://[1:2:3:4:5:6:7:8]/",
         "http://[::ffff:192.0.2.1]/",
-        "http://[v1.fe80::a]/",
     };
     for (auto value : valid) {
         auto parsed = Url::parse_http(as_rstd_str(value));
@@ -479,7 +487,7 @@ TEST(HttpValues, UriParserValidatesIpLiterals) {
     constexpr const char* invalid[] = {
         "http://[:]/",       "http://[1:2:3:4:5:6:7]/",    "http://[1:2:3:4:5:6:7:8:9]/",
         "http://[1::2::3]/", "http://[::ffff:999.0.2.1]/", "http://[v.fe80]/",
-        "http://[v1.]/",
+        "http://[v1.]/",     "http://[v1.fe80::a]/",
     };
     for (auto value : invalid) {
         auto parsed = Url::parse_http(as_rstd_str(value));
@@ -496,6 +504,182 @@ TEST(HttpValues, UriParserValidatesIpLiterals) {
     ASSERT_TRUE(invalid_port.is_err());
     EXPECT_TRUE(invalid_port.unwrap_err().kind().is_InvalidPort());
     EXPECT_EQ(invalid_port.unwrap_err().offset().to_primitive(), 23u);
+}
+
+TEST(HttpValues, UrlNormalizesRecordAndSerializesIdempotently) {
+    using lihttpto::Url;
+    struct Example {
+        ref<str> input;
+        ref<str> expected;
+    };
+    Example examples[] = {
+        { " \tHtTpS://EXAM\nPLE.com:00443/a/%2E/b/../c d?x='y'#f g\r"_str,
+          "https://example.com/a/c%20d?x=%27y%27#f%20g"_str },
+        { "http:\\\\0x7f.1\\a\\..\\b"_str, "http://127.0.0.1/b"_str },
+        { "https://[0:0:0:0:0:ffff:192.0.2.1]:443"_str, "https://[::ffff:c000:201]/"_str },
+        { "http://u@a:p:q@EXAMPLE.com"_str, "http://u%40a:p%3Aq@example.com/"_str },
+        { "https://:@example.com/a%zz/中文"_str,
+          "https://example.com/a%zz/%E4%B8%AD%E6%96%87"_str },
+        { "custom://EXAMPLE/a^b?q='x'#x`y"_str, "custom://EXAMPLE/a%5Eb?q='x'#x%60y"_str },
+        { "data:hello world ?x#f"_str, "data:hello world%20?x#f"_str },
+    };
+    for (const auto& example : examples) {
+        auto parsed = Url::parse(example.input);
+        ASSERT_TRUE(parsed.is_ok());
+        EXPECT_EQ(parsed->as_ref(), example.expected);
+        auto reparsed = Url::parse(parsed->as_ref());
+        ASSERT_TRUE(reparsed.is_ok());
+        EXPECT_EQ(reparsed->as_ref(), parsed->as_ref());
+        EXPECT_EQ(parsed->clone().as_ref(), parsed->as_ref());
+    }
+    auto credentials = Url::parse("https://user:pass@example.com/"_str).unwrap();
+    EXPECT_TRUE(credentials.port().is_none());
+    EXPECT_EQ(*credentials.effective_port(), u16(443));
+    EXPECT_EQ(*Url::parse("http://example.com:0/"_str)->effective_port(), u16());
+    EXPECT_TRUE(Url::parse("custom://host/"_str)->effective_port().is_none());
+    EXPECT_EQ(credentials.username(), "user"_str);
+    EXPECT_EQ(credentials.password(), "pass"_str);
+    auto port_error = Url::parse("\thttps://a:\n65536"_str).unwrap_err();
+    EXPECT_TRUE(port_error.kind().is_InvalidPort());
+    EXPECT_EQ(port_error.offset(), usize(16));
+}
+
+TEST(HttpValues, UrlBaseAndOriginsUseParsedRecord) {
+    using lihttpto::Url;
+    auto base = Url::parse("https://user:pass@EXAMPLE.com:443/a/b?q#old"_str).unwrap();
+    EXPECT_EQ(base.resolve("https:../c"_str)->as_ref(), "https://user:pass@example.com/c"_str);
+    EXPECT_EQ(base.resolve("\\\\other.invalid\\x"_str)->as_ref(), "https://other.invalid/x"_str);
+    EXPECT_EQ(base.resolve("?"_str)->as_ref(), "https://user:pass@example.com/a/b?"_str);
+    EXPECT_EQ(base.resolve(""_str)->as_ref(), "https://user:pass@example.com/a/b?q"_str);
+    EXPECT_EQ(base.as_ref(), "https://user:pass@example.com/a/b?q#old"_str);
+    auto opaque = Url::parse("data:text/plain,hello?x#old"_str).unwrap();
+    EXPECT_EQ(opaque.resolve("#new"_str)->as_ref(), "data:text/plain,hello?x#new"_str);
+    EXPECT_TRUE(opaque.resolve("next"_str).is_err());
+    EXPECT_TRUE(opaque.resolve(""_str).is_err());
+    auto ipv4 = Url::parse("http://127.1/"_str).unwrap();
+    EXPECT_TRUE(ipv4.same_http_origin(Url::parse("http://0x7f000001:80/"_str).unwrap()));
+    EXPECT_FALSE(ipv4.same_http_origin(Url::parse("http://127.0.0.1:81/"_str).unwrap()));
+    auto ipv6 = Url::parse("https://[2001:DB8:0:0:0:0:0:1]/"_str).unwrap();
+    EXPECT_TRUE(ipv6.same_http_origin(Url::parse("https://[2001:db8::1]:443/"_str).unwrap()));
+    EXPECT_TRUE(
+        Url::parse_http("file:///tmp/input"_str).unwrap_err().kind().is_UnsupportedScheme());
+    EXPECT_TRUE(Url::parse("https://é.example/"_str).unwrap_err().kind().is_UnsupportedHost());
+}
+
+TEST(HttpValues, FileUrlHostDriveAndBaseResolution) {
+    using lihttpto::Url;
+    struct Example {
+        ref<str> input;
+        ref<str> expected;
+    };
+    Example examples[] = {
+        { "file:"_str, "file:///"_str },
+        { "file://LOCALhost/etc/a/../b"_str, "file:///etc/b"_str },
+        { "file://C|/a"_str, "file:///C:/a"_str },
+        { "file:C|\\a\\..\\b"_str, "file:///C:/b"_str },
+        { "file://server/share/../asset"_str, "file://server/asset"_str },
+        { "file://[0:0:0:0:0:0:0:1]/a"_str, "file://[::1]/a"_str },
+        { "file:///C:/../../x"_str, "file:///C:/x"_str },
+        { "file:////a"_str, "file:////a"_str },
+    };
+    for (const auto& example : examples) {
+        auto parsed = Url::parse(example.input);
+        ASSERT_TRUE(parsed.is_ok());
+        EXPECT_EQ(parsed->as_ref(), example.expected);
+        EXPECT_EQ(Url::parse(parsed->as_ref())->as_ref(), example.expected);
+        EXPECT_TRUE(parsed->effective_port().is_none());
+        EXPECT_TRUE(parsed->origin()->is_opaque());
+    }
+    auto    base         = Url::parse("file://server/C:/one/two?q#old"_str).unwrap();
+    Example references[] = {
+        { "../three"_str, "file://server/C:/three"_str },
+        { "/three"_str, "file://server/C:/three"_str },
+        { "/"_str, "file://server/C:/"_str },
+        { "/D|/three"_str, "file://server/D:/three"_str },
+        { "D|/three"_str, "file://server/D:/three"_str },
+        { "//localhost/tmp"_str, "file:///tmp"_str },
+        { "//D:/three"_str, "file:///D:/three"_str },
+        { "file:../three"_str, "file://server/C:/three"_str },
+        { "#new"_str, "file://server/C:/one/two?q#new"_str },
+        { "?"_str, "file://server/C:/one/two?"_str },
+        { ""_str, "file://server/C:/one/two?q"_str },
+    };
+    for (const auto& example : references) {
+        auto resolved = base.resolve(example.input);
+        ASSERT_TRUE(resolved.is_ok());
+        EXPECT_EQ(resolved->as_ref(), example.expected);
+    }
+    EXPECT_EQ(base.as_ref(), "file://server/C:/one/two?q#old"_str);
+    for (auto input : { "file://user@host/a"_str,
+                        "file://host:80/a"_str,
+                        "file://host:/a"_str,
+                        "file://[::1]:80/a"_str })
+        EXPECT_TRUE(Url::parse(input).is_err());
+}
+
+TEST(HttpValues, UrlOriginDistinguishesTupleAndOpaqueIdentity) {
+    using lihttpto::Url;
+    for (auto scheme : { "http"_str, "https"_str, "ftp"_str, "ws"_str, "wss"_str }) {
+        auto url    = Url::parse(rstd::format("{}://EXAMPLE.com/a", scheme).as_str()).unwrap();
+        auto origin = url.origin().unwrap();
+        ASSERT_FALSE(origin.is_opaque());
+        EXPECT_EQ(origin.tuple()->get().scheme.as_str(), scheme);
+        EXPECT_EQ(origin.tuple()->get().host.as_str(), "example.com"_str);
+        EXPECT_TRUE(origin.tuple()->get().port.is_none());
+        EXPECT_EQ(origin.serialize().as_str(), rstd::format("{}://example.com", scheme).as_str());
+        EXPECT_TRUE(origin.same_origin(origin.clone()));
+    }
+    auto http       = Url::parse("https://example.com/"_str).unwrap().origin().unwrap();
+    auto other_port = Url::parse("https://example.com:444/"_str).unwrap().origin().unwrap();
+    EXPECT_FALSE(http.same_origin(other_port));
+    EXPECT_EQ(other_port.serialize().as_str(), "https://example.com:444"_str);
+    for (auto input : { "data:hello"_str, "file:///a"_str, "custom://host/a"_str }) {
+        auto url = Url::parse(input).unwrap();
+        auto a   = url.origin().unwrap();
+        auto b   = url.origin().unwrap();
+        ASSERT_TRUE(a.is_opaque());
+        EXPECT_TRUE(a.tuple().is_none());
+        EXPECT_EQ(a.serialize().as_str(), "null"_str);
+        EXPECT_EQ(b.serialize().as_str(), "null"_str);
+        EXPECT_FALSE(a.same_origin(b));
+        EXPECT_FALSE(a.same_origin(http));
+        EXPECT_TRUE(a.same_origin(a));
+        EXPECT_TRUE(a.same_origin(rstd::as<rstd::clone::Clone>(a).clone()));
+    }
+}
+
+TEST(HttpValues, BlobOriginDoesNotExpandHttpTransportScope) {
+    using lihttpto::Url;
+    auto http = Url::parse("https://example.com/"_str).unwrap();
+    auto blob = Url::parse("blob:https://EXAMPLE.com:443/identifier"_str).unwrap();
+    EXPECT_TRUE(blob.origin()->same_origin(http.origin().unwrap()));
+    EXPECT_FALSE(blob.same_http_origin(http));
+    EXPECT_TRUE(blob.http_origin().is_none());
+    EXPECT_TRUE(Url::parse_http(blob.as_ref()).is_err());
+    for (auto input : { "blob:blob:https://example.com/"_str,
+                        "blob:ftp://example.com/"_str,
+                        "blob:ws://example.com/"_str,
+                        "blob:file:///x"_str,
+                        "blob:invalid"_str,
+                        "blob:http%3a//example.com/"_str })
+        EXPECT_TRUE(Url::parse(input)->origin()->is_opaque());
+    auto unsupported = Url::parse("blob:https://é.example/id"_str).unwrap().origin();
+    ASSERT_TRUE(unsupported.is_err());
+    EXPECT_TRUE(unsupported.unwrap_err().kind().is_UnsupportedHost());
+}
+
+TEST(HttpValues, UriWireParserDoesNotApplyBrowserRepairs) {
+    namespace uri = lihttpto::parser::uri;
+    for (auto input : { "https://example.com/a b"_str,
+                        "https:\\\\example.com/a"_str,
+                        "https://exam\nple.com/a"_str,
+                        "https://example.com/%zz"_str }) {
+        EXPECT_TRUE(lihttpto::Url::parse(input).is_ok());
+        EXPECT_TRUE(uri::parse(input).is_err());
+    }
+    EXPECT_TRUE(uri::parse("../relative?"_str).is_ok());
+    EXPECT_TRUE(uri::parse("http://[v1.fe80::a]/"_str).is_ok());
+    EXPECT_TRUE(lihttpto::Url::parse("http://[v1.fe80::a]/"_str).is_err());
 }
 
 TEST(HttpValues, MessageHeadParsesTypedResponseAndDuplicateFields) {
@@ -723,16 +907,14 @@ TEST(HttpValues, HttpErrorDisplayTraitsDescribeStableKinds) {
     auto query   = QueryError { QueryErrorKind::InvalidUtf8(), usize(2) };
     auto cookie  = CookieError { CookieErrorKind::InvalidAttribute(), usize(5) };
 
-    EXPECT_EQ(rstd::cppstd::to_string(rstd::format("{}", url)),
-              "HTTP URL has an unsupported scheme");
+    EXPECT_EQ(rstd::cppstd::to_string(rstd::format("{}", url)), "unsupported URL scheme");
     EXPECT_EQ(rstd::cppstd::to_string(rstd::format("{}", header)), "invalid HTTP field value");
     EXPECT_EQ(rstd::cppstd::to_string(rstd::format("{}", message)),
               "HTTP field section is too large");
     EXPECT_EQ(rstd::cppstd::to_string(rstd::format("{}", query)), "invalid UTF-8 in query");
     EXPECT_EQ(rstd::cppstd::to_string(rstd::format("{}", cookie)), "invalid cookie attribute");
 
-    EXPECT_EQ(rstd::cppstd::to_string(rstd::format("{:?}", url)),
-              "HTTP URL has an unsupported scheme");
+    EXPECT_EQ(rstd::cppstd::to_string(rstd::format("{:?}", url)), "unsupported URL scheme");
     EXPECT_TRUE(rstd::as<rstd::error::Error>(url).source().is_none());
     EXPECT_TRUE(rstd::as<rstd::error::Error>(header).source().is_none());
     EXPECT_TRUE(rstd::as<rstd::error::Error>(message).source().is_none());

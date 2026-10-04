@@ -19,6 +19,7 @@ export struct UrlErrorKind {
               (UnexpectedEnd),
               (MissingScheme),
               (UnsupportedScheme),
+              (UnsupportedHost),
               (MissingAuthority),
               (MissingHost))
 };
@@ -127,15 +128,15 @@ private:
 
 inline auto message(const UrlErrorKind& kind) noexcept -> const char* {
     switch (kind.tag()) {
-    case UrlErrorKind::Tag::InvalidSyntax: return "invalid URI reference";
-    case UrlErrorKind::Tag::InvalidCharacter: return "invalid character in URI reference";
-    case UrlErrorKind::Tag::InvalidPercentEncoding:
-        return "invalid percent encoding in URI reference";
-    case UrlErrorKind::Tag::InvalidIpAddress: return "invalid IP address in URI reference";
-    case UrlErrorKind::Tag::InvalidPort: return "invalid port in URI reference";
-    case UrlErrorKind::Tag::UnexpectedEnd: return "unexpected end of URI reference";
-    case UrlErrorKind::Tag::MissingScheme: return "HTTP URL is missing a scheme";
-    case UrlErrorKind::Tag::UnsupportedScheme: return "HTTP URL has an unsupported scheme";
+    case UrlErrorKind::Tag::InvalidSyntax: return "invalid URL";
+    case UrlErrorKind::Tag::InvalidCharacter: return "invalid character in URL";
+    case UrlErrorKind::Tag::InvalidPercentEncoding: return "invalid percent encoding in URL";
+    case UrlErrorKind::Tag::InvalidIpAddress: return "invalid IP address in URL";
+    case UrlErrorKind::Tag::InvalidPort: return "invalid port in URL";
+    case UrlErrorKind::Tag::UnexpectedEnd: return "unexpected end of URL";
+    case UrlErrorKind::Tag::MissingScheme: return "URL needs a scheme or a base";
+    case UrlErrorKind::Tag::UnsupportedScheme: return "unsupported URL scheme";
+    case UrlErrorKind::Tag::UnsupportedHost: return "URL host requires IDNA processing";
     case UrlErrorKind::Tag::MissingAuthority: return "HTTP URL is missing an authority";
     case UrlErrorKind::Tag::MissingHost: return "HTTP URL is missing a host";
     }

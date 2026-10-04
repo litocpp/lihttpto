@@ -35,6 +35,8 @@ struct ConnectionLimits {
     rstd::time::Duration close_timeout { rstd::time::Duration::from_millis(u64(100)) };
     usize                close_bytes { 65536 };
     usize                requests { 100 };
+    // When set, each streamed body write has its own budget instead of the response-wide deadline.
+    Option<rstd::time::Duration> stream_write_timeout;
 };
 } // namespace lihttpto
 
@@ -306,10 +308,14 @@ public:
         if (! stream_body_allowed_ && ! bytes.is_empty())
             co_return Err(
                 response_error(ResponseWriteError { ResponseError::InvalidBody, None() }));
-        if (! bytes.is_empty())
-            rstd_co_try(co_await write_with_deadline(
-                            *stream_, bytes, stream_started_, limits_.write_timeout),
+        if (! bytes.is_empty()) {
+            auto started = limits_.stream_write_timeout.is_some() ? rstd::time::Instant::now()
+                                                                  : stream_started_;
+            auto budget  = limits_.stream_write_timeout.is_some() ? *limits_.stream_write_timeout
+                                                                  : limits_.write_timeout;
+            rstd_co_try(co_await write_with_deadline(*stream_, bytes, started, budget),
                         response_error);
+        }
         state_             = State::Streaming;
         operation.complete = true;
         co_return Ok(empty {});

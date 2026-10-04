@@ -418,6 +418,50 @@ auto streaming_body_rules(rstd::net::TcpStream  server,
 TEST(Connection, StreamsMultiplePartsThenCloses) {
     check(streaming);
 }
+
+namespace
+{
+auto stream_budget(rstd::net::TcpStream server, rstd::net::TcpStream& client, int mode)
+    -> rstd::async::coro<bool> {
+    ConnectionLimits limits;
+    limits.write_timeout = rstd::time::Duration::from_millis(u64(100));
+    if (mode != 0)
+        limits.stream_write_timeout =
+            Some(rstd::time::Duration::from_millis(u64(mode == 1 ? 100 : 0)));
+    Connection connection(rstd::move(server), limits);
+    if (! (co_await send(client, "GET / HTTP/1.1\r\nHost: x\r\n\r\n"_str))) co_return false;
+    auto request = co_await connection.read_request();
+    if (request.is_err() || request->is_none()) co_return false;
+    StreamResponseHead response;
+    if ((co_await connection.begin_response(response)).is_err()) co_return false;
+    if (! (co_await receive(client, "HTTP/1.1 200 \r\nConnection: close\r\n\r\n"_str)))
+        co_return false;
+    co_await rstd::async::sleep(rstd::time::Duration::from_millis(u64(150)));
+    auto bytes   = rstd::bytes::Bytes::copy_from_slice("x"_str.as_bytes());
+    auto written = co_await connection.write_body(bytes);
+    if (mode != 1)
+        co_return written.is_err() &&
+            written.unwrap_err().kind == ConnectionErrorKind::Timeout&& connection.is_closed();
+    if (written.is_err() || ! (co_await receive(client, "x"_str))) co_return false;
+    co_return connection.finish_response().is_ok();
+}
+} // namespace
+
+TEST(Connection, StreamBudgetDefaultsToResponseDeadline) {
+    check([](auto server, auto& client) {
+        return stream_budget(rstd::move(server), client, 0);
+    });
+}
+TEST(Connection, StreamBudgetCanBoundEachWriteIndependently) {
+    check([](auto server, auto& client) {
+        return stream_budget(rstd::move(server), client, 1);
+    });
+}
+TEST(Connection, StreamBudgetZeroClosesConnection) {
+    check([](auto server, auto& client) {
+        return stream_budget(rstd::move(server), client, 2);
+    });
+}
 TEST(Connection, StreamRejectsBodyForHeadAndNoContentStatuses) {
     for (auto status : array<u16, 3> { u16(204), u16(205), u16(304) }) {
         check([status](auto server, auto& client) {
