@@ -81,6 +81,7 @@ class Connection {
     bool                                          keep_alive_ {};
     bool                                          continue_pending_ {};
     bool                                          stream_body_allowed_ {};
+    Option<u64>                                   stream_remaining_;
     rstd::time::Instant                           stream_started_ { rstd::time::Instant::now() };
     usize                                         requests_ {};
     rstd::time::Instant                           body_started_ { rstd::time::Instant::now() };
@@ -280,7 +281,7 @@ public:
         co_return Ok(empty {});
     }
 
-    // Streamed responses are close-delimited and cannot reuse the connection.
+    // Streamed responses may declare a length and always close the connection.
     auto begin_response(const StreamResponseHead& response)
         -> rstd::async::coro<Result<empty, ConnectionError>> {
         if (state_ != State::Ready) co_return Err(connection_error(ConnectionErrorKind::State));
@@ -294,6 +295,7 @@ public:
             co_await write_with_deadline(*stream_, *head, stream_started_, limits_.write_timeout),
             response_error);
         stream_body_allowed_ = ! omit_response_body(response.status, method_.as_str());
+        stream_remaining_    = stream_body_allowed_ ? response.content_length : Some(u64());
         body_                = None();
         state_               = State::Streaming;
         operation.complete   = true;
@@ -308,6 +310,10 @@ public:
         if (! stream_body_allowed_ && ! bytes.is_empty())
             co_return Err(
                 response_error(ResponseWriteError { ResponseError::InvalidBody, None() }));
+        auto length = u64(bytes.len().to_primitive());
+        if (stream_remaining_.is_some() && length > *stream_remaining_)
+            co_return Err(
+                response_error(ResponseWriteError { ResponseError::InvalidBody, None() }));
         if (! bytes.is_empty()) {
             auto started = limits_.stream_write_timeout.is_some() ? rstd::time::Instant::now()
                                                                   : stream_started_;
@@ -316,6 +322,7 @@ public:
             rstd_co_try(co_await write_with_deadline(*stream_, bytes, started, budget),
                         response_error);
         }
+        if (stream_remaining_.is_some()) *stream_remaining_ -= length;
         state_             = State::Streaming;
         operation.complete = true;
         co_return Ok(empty {});
@@ -323,7 +330,10 @@ public:
 
     auto finish_response() -> Result<empty, ConnectionError> {
         if (state_ != State::Streaming) return Err(connection_error(ConnectionErrorKind::State));
+        bool incomplete = stream_remaining_.is_some() && *stream_remaining_ != u64();
         close();
+        if (incomplete)
+            return Err(response_error(ResponseWriteError { ResponseError::InvalidBody, None() }));
         return Ok(empty {});
     }
 

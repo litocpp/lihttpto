@@ -16,8 +16,9 @@ struct Response {
     rstd::bytes::Bytes body;
 };
 struct StreamResponseHead {
-    u16     status { 200 };
-    Headers headers;
+    u16         status { 200 };
+    Headers     headers;
+    Option<u64> content_length;
 };
 enum class ResponseError
 {
@@ -140,7 +141,7 @@ export namespace lihttpto
 auto validate_response_head(const StreamResponseHead& response, ref<str> request_method)
     -> Result<empty, ResponseError> {
     return validate_response_metadata(
-        response.status, response.headers.as_slice(), None(), request_method);
+        response.status, response.headers.as_slice(), response.content_length, request_method);
 }
 
 auto encode_response_head(const Response& response,
@@ -163,7 +164,7 @@ auto encode_response_head(const StreamResponseHead& response,
                           usize limit = usize(65536)) -> Result<rstd::bytes::Bytes, ResponseError> {
     return encode_response_metadata(response.status,
                                     response.headers.as_slice(),
-                                    None(),
+                                    response.content_length,
                                     request_method,
                                     version,
                                     false,

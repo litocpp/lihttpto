@@ -421,6 +421,59 @@ TEST(Connection, StreamsMultiplePartsThenCloses) {
 
 namespace
 {
+auto fixed_stream(rstd::net::TcpStream server, rstd::net::TcpStream& client, int mode)
+    -> rstd::async::coro<bool> {
+    Connection connection(rstd::move(server));
+    auto       wire = mode == 3 ? "HEAD / HTTP/1.1\r\nHost: x\r\n\r\n"_str
+                                : "GET / HTTP/1.1\r\nHost: x\r\n\r\n"_str;
+    if (! (co_await send(client, wire))) co_return false;
+    auto request = co_await connection.read_request();
+    if (request.is_err() || request->is_none()) co_return false;
+    StreamResponseHead response;
+    response.content_length = Some(u64(mode == 4 ? 0 : 3));
+    if ((co_await connection.begin_response(response)).is_err()) co_return false;
+    if (! (co_await receive(
+            client,
+            mode == 4 ? "HTTP/1.1 200 \r\nContent-Length: 0\r\nConnection: close\r\n\r\n"_str
+                      : "HTTP/1.1 200 \r\nContent-Length: 3\r\nConnection: close\r\n\r\n"_str)))
+        co_return false;
+    if (mode < 3) {
+        auto first = rstd::bytes::Bytes::copy_from_slice("ab"_str.as_bytes());
+        if ((co_await connection.write_body(first)).is_err()) co_return false;
+        if (! (co_await receive(client, "ab"_str))) co_return false;
+        if (mode == 2) {
+            auto excessive = co_await connection.write_body(first);
+            co_return excessive.is_err() && connection.is_closed() &&
+                excessive.as_ref().unwrap_err().response.is_some() &&
+                *excessive.as_ref().unwrap_err().response == ResponseError::InvalidBody;
+        }
+        if (mode == 0) {
+            auto last = rstd::bytes::Bytes::copy_from_slice("c"_str.as_bytes());
+            if ((co_await connection.write_body(last)).is_err()) co_return false;
+            if (! (co_await receive(client, "c"_str))) co_return false;
+        }
+    }
+    auto finished = connection.finish_response();
+    if (! connection.is_closed() || (mode == 1 ? finished.is_ok() : finished.is_err()))
+        co_return false;
+    if (mode == 1 && (! finished.as_ref().unwrap_err().response.is_some() ||
+                      *finished.as_ref().unwrap_err().response != ResponseError::InvalidBody))
+        co_return false;
+    auto tail = rstd::bytes::BytesMut::with_capacity(usize(1));
+    auto eof  = co_await rstd::async::io::read(client, tail);
+    co_return eof.is_ok() && *eof == usize();
+}
+} // namespace
+
+TEST(Connection, FixedStreamLengthIsEnforcedAndHeadOmitsBody) {
+    for (int mode = 0; mode != 5; ++mode)
+        check([mode](auto server, auto& client) {
+            return fixed_stream(rstd::move(server), client, mode);
+        });
+}
+
+namespace
+{
 auto stream_budget(rstd::net::TcpStream server, rstd::net::TcpStream& client, int mode)
     -> rstd::async::coro<bool> {
     ConnectionLimits limits;

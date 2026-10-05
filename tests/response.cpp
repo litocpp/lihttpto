@@ -164,3 +164,19 @@ TEST(Response, StreamingUsesSharedValidationAndCloseDelimitedFraming) {
     EXPECT_TRUE(
         rstd::str_::from_utf8(encoded.as_slice()).unwrap().contains("Content-Length: 0"_str));
 }
+
+TEST(Response, StreamingCanDeclareExactLengthIncludingHead) {
+    StreamResponseHead response;
+    response.content_length = Some(u64(123));
+    for (auto method : array<ref<str>, 2> { "GET"_str, "HEAD"_str }) {
+        auto encoded = encode_response_head(response, method, Version::Http11);
+        ASSERT_TRUE(encoded.is_ok());
+        EXPECT_TRUE(rstd::str_::from_utf8(encoded->as_slice())
+                        .unwrap()
+                        .contains("Content-Length: 123\r\n"_str));
+    }
+    response.status = u16(204);
+    EXPECT_EQ(validate_response_head(response, "GET"_str).unwrap_err(), ResponseError::InvalidBody);
+    response.status = u16(205);
+    EXPECT_EQ(validate_response_head(response, "GET"_str).unwrap_err(), ResponseError::InvalidBody);
+}
