@@ -1,15 +1,13 @@
 #include <rstd/test/gtest.hpp>
 #include <rstd/enum.hpp>
-#include <string>
-#include <string_view>
 import lihttpto;
 import lihttpto.parser;
-import rstd.cppstd;
+import rstd;
 using namespace rstd::prelude;
 using namespace rstd::literals;
 
-auto as_rstd_str(std::string_view value) -> rstd::ref<rstd::str> {
-    return rstd::cppstd::as_str(value).unwrap();
+auto as_rstd_str(const char* value) -> ref<str> {
+    return rstd::ffi::CStr::from_ptr(value).to_str().unwrap();
 }
 
 TEST(HttpValues, MessageParserByteLimits) {
@@ -52,12 +50,11 @@ TEST(HttpValues, HttpOriginSerialization) {
 TEST(HttpValues, UrlEncoding) {
     using namespace lihttpto;
 
-    EXPECT_EQ(rstd::cppstd::as_string_view(encode_component("a b/+~"_str).as_str()),
-              "a%20b%2F%2B~");
+    EXPECT_EQ(encode_component("a b/+~"_str).as_str(), "a%20b%2F%2B~"_str);
 
     auto decoded = decode_component("a%20b%2Fb+plus"_str);
     ASSERT_TRUE(decoded.is_ok());
-    EXPECT_EQ(rstd::cppstd::as_string_view(decoded.unwrap().as_str()), "a b/b+plus");
+    EXPECT_EQ(decoded.unwrap().as_str(), "a b/b+plus"_str);
 
     auto invalid = decode_component("a%20b%ZZ"_str);
     ASSERT_TRUE(invalid.is_err());
@@ -66,7 +63,7 @@ TEST(HttpValues, UrlEncoding) {
 
     auto form = decode_form_component("a+b"_str);
     ASSERT_TRUE(form.is_ok());
-    EXPECT_EQ(rstd::cppstd::as_string_view(form.unwrap().as_str()), "a b");
+    EXPECT_EQ(form.unwrap().as_str(), "a b"_str);
 }
 
 TEST(HttpValues, QueryParamsPreserveOrderedRepeatedValues) {
@@ -77,22 +74,21 @@ TEST(HttpValues, QueryParamsPreserveOrderedRepeatedValues) {
     auto query = rstd::move(parsed).unwrap();
 
     EXPECT_EQ(query.len().to_primitive(), 4u);
-    EXPECT_EQ(rstd::cppstd::as_string_view(*query.get("first"_str)), "one");
+    EXPECT_EQ(*query.get("first"_str), "one"_str);
 
     auto values = query.values("repeat"_str);
     auto first  = values.next();
     auto second = values.next();
     ASSERT_TRUE(first.is_some());
     ASSERT_TRUE(second.is_some());
-    EXPECT_EQ(rstd::cppstd::as_string_view(*first), "a");
-    EXPECT_EQ(rstd::cppstd::as_string_view(*second), "b c");
+    EXPECT_EQ(*first, "a"_str);
+    EXPECT_EQ(*second, "b c"_str);
     EXPECT_TRUE(values.next().is_none());
 
-    EXPECT_EQ(rstd::cppstd::as_string_view(query.encode_form().as_str()),
-              "first=one&repeat=a&empty=&repeat=b+c");
+    EXPECT_EQ(query.encode_form().as_str(), "first=one&repeat=a&empty=&repeat=b+c"_str);
 
     query.set("repeat"_str, "replacement"_str);
-    EXPECT_EQ(rstd::cppstd::as_string_view(*query.get("repeat"_str)), "replacement");
+    EXPECT_EQ(*query.get("repeat"_str), "replacement"_str);
     EXPECT_EQ(query.values("repeat"_str).next()->size().to_primitive(), 11u);
 
     auto invalid_utf8 = QueryParams::parse_form("key=%FF"_str);
@@ -102,19 +98,18 @@ TEST(HttpValues, QueryParamsPreserveOrderedRepeatedValues) {
 
     auto from_trait = rstd::from_str<QueryParams>("a=1&a=2"_str);
     ASSERT_TRUE(from_trait.is_ok());
-    EXPECT_EQ(rstd::cppstd::to_string(rstd::format("{}", from_trait.unwrap())), "a=1&a=2");
+    EXPECT_EQ(rstd::format("{}", from_trait.unwrap()).as_str(), "a=1&a=2"_str);
 
     auto raw = QueryParams::parse_query("value=a+b&space=a%20b"_str);
     ASSERT_TRUE(raw.is_ok());
     auto raw_query = rstd::move(raw).unwrap();
-    EXPECT_EQ(rstd::cppstd::as_string_view(*raw_query.get("value"_str)), "a+b");
-    EXPECT_EQ(rstd::cppstd::as_string_view(*raw_query.get("space"_str)), "a b");
-    EXPECT_EQ(rstd::cppstd::as_string_view(raw_query.encode_query().as_str()),
-              "value=a%2Bb&space=a%20b");
+    EXPECT_EQ(*raw_query.get("value"_str), "a+b"_str);
+    EXPECT_EQ(*raw_query.get("space"_str), "a b"_str);
+    EXPECT_EQ(raw_query.encode_query().as_str(), "value=a%2Bb&space=a%20b"_str);
 
     auto raw_trait = rstd::from_str<QueryParams>("value=a+b"_str);
     ASSERT_TRUE(raw_trait.is_ok());
-    EXPECT_EQ(rstd::cppstd::to_string(rstd::format("{}", raw_trait.unwrap())), "value=a%2Bb");
+    EXPECT_EQ(rstd::format("{}", raw_trait.unwrap()).as_str(), "value=a%2Bb"_str);
 }
 
 TEST(HttpValues, CookieValuesParseAttributesAndPreserveOrder) {
@@ -123,10 +118,10 @@ TEST(HttpValues, CookieValuesParseAttributesAndPreserveOrder) {
     auto pair = rstd::from_str<Cookie>("session=\"abc123\""_str);
     ASSERT_TRUE(pair.is_ok());
     auto cookie = rstd::move(pair).unwrap();
-    EXPECT_EQ(rstd::cppstd::as_string_view(cookie.name()), "session");
-    EXPECT_EQ(rstd::cppstd::as_string_view(cookie.value()), "abc123");
+    EXPECT_EQ(cookie.name(), "session"_str);
+    EXPECT_EQ(cookie.value(), "abc123"_str);
     EXPECT_TRUE(cookie.is_quoted());
-    EXPECT_EQ(rstd::cppstd::to_string(rstd::format("{}", cookie)), "session=\"abc123\"");
+    EXPECT_EQ(rstd::format("{}", cookie).as_str(), "session=\"abc123\""_str);
 
     auto header = CookieHeader::parse(" \tfirst=one; repeat=a; repeat=\"b\" \t"_str);
     ASSERT_TRUE(header.is_ok());
@@ -134,10 +129,9 @@ TEST(HttpValues, CookieValuesParseAttributesAndPreserveOrder) {
     EXPECT_EQ(cookies.len().to_primitive(), 3u);
     auto repeat = cookies.get("repeat"_str);
     ASSERT_TRUE(repeat.is_some());
-    EXPECT_EQ(rstd::cppstd::as_string_view((**repeat).value()), "a");
+    EXPECT_EQ((**repeat).value(), "a"_str);
     EXPECT_TRUE(cookies.get("Repeat"_str).is_none());
-    EXPECT_EQ(rstd::cppstd::as_string_view(cookies.encode().as_str()),
-              "first=one; repeat=a; repeat=\"b\"");
+    EXPECT_EQ(cookies.encode().as_str(), "first=one; repeat=a; repeat=\"b\""_str);
 
     auto set =
         SetCookie::parse("session=abc123; Path=/account; Secure; HttpOnly; SameSite=Lax"_str);
@@ -148,10 +142,10 @@ TEST(HttpValues, CookieValuesParseAttributesAndPreserveOrder) {
     auto path = set_cookie.attribute("path"_str);
     ASSERT_TRUE(path.is_some());
     ASSERT_TRUE((**path).value().is_some());
-    EXPECT_EQ(rstd::cppstd::as_string_view(*(**path).value()), "/account");
+    EXPECT_EQ(*(**path).value(), "/account"_str);
     EXPECT_EQ(set_cookie.attributes().count().to_primitive(), 4u);
-    EXPECT_EQ(rstd::cppstd::to_string(rstd::format("{}", set_cookie)),
-              "session=abc123; Path=/account; Secure; HttpOnly; SameSite=Lax");
+    EXPECT_EQ(rstd::format("{}", set_cookie).as_str(),
+              "session=abc123; Path=/account; Secure; HttpOnly; SameSite=Lax"_str);
 
     auto invalid_name = Cookie::parse("bad name=value"_str);
     ASSERT_TRUE(invalid_name.is_err());
@@ -180,7 +174,7 @@ TEST(HttpValues, ParserCursorCompositionAndErrors) {
     EXPECT_EQ(cursor.offset().to_primitive(), 3u);
     auto prefix_bytes = cursor.slice(parser::Span { usize(), usize(3) });
     auto prefix_text  = rstd::str_::from_utf8_unchecked(prefix_bytes);
-    EXPECT_EQ(rstd::cppstd::as_string_view(prefix_text), "alp");
+    EXPECT_EQ(prefix_text, "alp"_str);
 
     auto incomplete = parser::take_literal(cursor, "habet"_str);
     ASSERT_TRUE(incomplete.is_err());
@@ -325,24 +319,21 @@ TEST(HttpValues, UrlParsesOwnedComponentsAndTraits) {
     ASSERT_TRUE(parsed.is_ok());
     auto url = rstd::move(parsed).unwrap();
 
-    EXPECT_EQ(rstd::cppstd::as_string_view(*url.scheme()), "foo");
-    EXPECT_EQ(rstd::cppstd::as_string_view(*url.authority()), "user@example.com:8042");
-    EXPECT_EQ(rstd::cppstd::as_string_view(*url.userinfo()), "user");
-    EXPECT_EQ(rstd::cppstd::as_string_view(*url.host()), "example.com");
-    EXPECT_EQ(rstd::cppstd::as_string_view(*url.port()), "8042");
-    EXPECT_EQ(rstd::cppstd::as_string_view(url.path()), "/over/there");
-    EXPECT_EQ(rstd::cppstd::as_string_view(*url.query()), "name=ferret");
-    EXPECT_EQ(rstd::cppstd::as_string_view(*url.fragment()), "nose");
-    EXPECT_EQ(rstd::cppstd::to_string(url.request_target()), "/over/there?name=ferret");
+    EXPECT_EQ(*url.scheme(), "foo"_str);
+    EXPECT_EQ(*url.authority(), "user@example.com:8042"_str);
+    EXPECT_EQ(*url.userinfo(), "user"_str);
+    EXPECT_EQ(*url.host(), "example.com"_str);
+    EXPECT_EQ(*url.port(), "8042"_str);
+    EXPECT_EQ(url.path(), "/over/there"_str);
+    EXPECT_EQ(*url.query(), "name=ferret"_str);
+    EXPECT_EQ(*url.fragment(), "nose"_str);
+    EXPECT_EQ(url.request_target().as_str(), "/over/there?name=ferret"_str);
 
     auto cloned = rstd::as<rstd::clone::Clone>(url).clone();
-    EXPECT_EQ(rstd::cppstd::as_string_view(cloned.as_ref()),
-              "foo://user@example.com:8042/over/there?name=ferret#nose");
-    EXPECT_EQ(
-        rstd::cppstd::as_string_view(rstd::as<rstd::convert::AsRef<rstd::str>>(cloned).as_ref()),
-        rstd::cppstd::as_string_view(cloned.as_ref()));
-    EXPECT_EQ(rstd::cppstd::to_string(rstd::format("{}", cloned)),
-              "foo://user@example.com:8042/over/there?name=ferret#nose");
+    EXPECT_EQ(cloned.as_ref(), "foo://user@example.com:8042/over/there?name=ferret#nose"_str);
+    EXPECT_EQ(rstd::as<rstd::convert::AsRef<rstd::str>>(cloned).as_ref(), cloned.as_ref());
+    EXPECT_EQ(rstd::format("{}", cloned).as_str(),
+              "foo://user@example.com:8042/over/there?name=ferret#nose"_str);
 
     EXPECT_TRUE(rstd::from_str<Url>("../relative?"_str).is_err());
     auto from_base = Url::parse("../relative?"_str, url);
@@ -362,8 +353,8 @@ TEST(HttpValues, UrlParsesOwnedComponentsAndTraits) {
     auto encoded_path = Url::parse("http://example.com/a%2Fb"_str);
     ASSERT_TRUE(encoded_path.is_ok());
     auto encoded_path_url = rstd::move(encoded_path).unwrap();
-    EXPECT_EQ(rstd::cppstd::as_string_view(encoded_path_url.path()), "/a%2Fb");
-    EXPECT_EQ(rstd::cppstd::to_string(encoded_path_url.request_target()), "/a%2Fb");
+    EXPECT_EQ(encoded_path_url.path(), "/a%2Fb"_str);
+    EXPECT_EQ(encoded_path_url.request_target().as_str(), "/a%2Fb"_str);
 }
 
 TEST(HttpValues, HttpUrlValidationReportsKindsAndOffsets) {
@@ -371,11 +362,11 @@ TEST(HttpValues, HttpUrlValidationReportsKindsAndOffsets) {
 
     auto invalid_percent = Url::parse("http://example.com/%zz"_str);
     ASSERT_TRUE(invalid_percent.is_ok());
-    EXPECT_EQ(rstd::cppstd::as_string_view(invalid_percent->path()), "/%zz");
+    EXPECT_EQ(invalid_percent->path(), "/%zz"_str);
 
     auto invalid_character = Url::parse("http://example.com/a b"_str);
     ASSERT_TRUE(invalid_character.is_ok());
-    EXPECT_EQ(rstd::cppstd::as_string_view(invalid_character->path()), "/a%20b");
+    EXPECT_EQ(invalid_character->path(), "/a%20b"_str);
 
     auto missing_scheme = Url::parse_http("//example.com/path"_str);
     ASSERT_TRUE(missing_scheme.is_err());
@@ -387,7 +378,7 @@ TEST(HttpValues, HttpUrlValidationReportsKindsAndOffsets) {
 
     auto implicit_authority = Url::parse_http("http:path"_str);
     ASSERT_TRUE(implicit_authority.is_ok());
-    EXPECT_EQ(rstd::cppstd::as_string_view(implicit_authority->as_ref()), "http://path/");
+    EXPECT_EQ(implicit_authority->as_ref(), "http://path/"_str);
 
     auto missing_host = Url::parse_http("http://?query"_str);
     ASSERT_TRUE(missing_host.is_err());
@@ -400,9 +391,8 @@ TEST(HttpValues, HttpUrlValidationReportsKindsAndOffsets) {
                << error.offset().to_primitive();
     }
     auto value = rstd::move(request).unwrap();
-    EXPECT_EQ(rstd::cppstd::as_string_view(value.as_ref()),
-              "https://[2001:db8::1]/resource?#fragment");
-    EXPECT_EQ(rstd::cppstd::to_string(value.request_target()), "/resource?");
+    EXPECT_EQ(value.as_ref(), "https://[2001:db8::1]/resource?#fragment"_str);
+    EXPECT_EQ(value.request_target().as_str(), "/resource?"_str);
 }
 
 TEST(HttpValues, UrlResolvesReferencesAgainstBase) {
@@ -464,8 +454,7 @@ TEST(HttpValues, UrlResolvesReferencesAgainstBase) {
     for (auto const& example : examples) {
         auto resolved = base.resolve(as_rstd_str(example.reference));
         ASSERT_TRUE(resolved.is_ok()) << example.reference;
-        EXPECT_EQ(rstd::cppstd::as_string_view(resolved.unwrap().as_ref()), example.expected)
-            << example.reference;
+        EXPECT_EQ(resolved.unwrap().as_ref(), as_rstd_str(example.expected)) << example.reference;
     }
 }
 
@@ -610,16 +599,17 @@ TEST(HttpValues, FileUrlHostDriveAndBaseResolution) {
         EXPECT_EQ(resolved->as_ref(), example.expected);
     }
     EXPECT_EQ(base.as_ref(), "file://server/C:/one/two?q#old"_str);
-    for (auto input : { "file://user@host/a"_str,
-                        "file://host:80/a"_str,
-                        "file://host:/a"_str,
-                        "file://[::1]:80/a"_str })
+    for (auto input : array<ref<str>, 4> { "file://user@host/a"_str,
+                                           "file://host:80/a"_str,
+                                           "file://host:/a"_str,
+                                           "file://[::1]:80/a"_str })
         EXPECT_TRUE(Url::parse(input).is_err());
 }
 
 TEST(HttpValues, UrlOriginDistinguishesTupleAndOpaqueIdentity) {
     using lihttpto::Url;
-    for (auto scheme : { "http"_str, "https"_str, "ftp"_str, "ws"_str, "wss"_str }) {
+    for (auto scheme :
+         array<ref<str>, 5> { "http"_str, "https"_str, "ftp"_str, "ws"_str, "wss"_str }) {
         auto url    = Url::parse(rstd::format("{}://EXAMPLE.com/a", scheme).as_str()).unwrap();
         auto origin = url.origin().unwrap();
         ASSERT_FALSE(origin.is_opaque());
@@ -633,7 +623,8 @@ TEST(HttpValues, UrlOriginDistinguishesTupleAndOpaqueIdentity) {
     auto other_port = Url::parse("https://example.com:444/"_str).unwrap().origin().unwrap();
     EXPECT_FALSE(http.same_origin(other_port));
     EXPECT_EQ(other_port.serialize().as_str(), "https://example.com:444"_str);
-    for (auto input : { "data:hello"_str, "file:///a"_str, "custom://host/a"_str }) {
+    for (auto input :
+         array<ref<str>, 3> { "data:hello"_str, "file:///a"_str, "custom://host/a"_str }) {
         auto url = Url::parse(input).unwrap();
         auto a   = url.origin().unwrap();
         auto b   = url.origin().unwrap();
@@ -656,12 +647,12 @@ TEST(HttpValues, BlobOriginDoesNotExpandHttpTransportScope) {
     EXPECT_FALSE(blob.same_http_origin(http));
     EXPECT_TRUE(blob.http_origin().is_none());
     EXPECT_TRUE(Url::parse_http(blob.as_ref()).is_err());
-    for (auto input : { "blob:blob:https://example.com/"_str,
-                        "blob:ftp://example.com/"_str,
-                        "blob:ws://example.com/"_str,
-                        "blob:file:///x"_str,
-                        "blob:invalid"_str,
-                        "blob:http%3a//example.com/"_str })
+    for (auto input : array<ref<str>, 6> { "blob:blob:https://example.com/"_str,
+                                           "blob:ftp://example.com/"_str,
+                                           "blob:ws://example.com/"_str,
+                                           "blob:file:///x"_str,
+                                           "blob:invalid"_str,
+                                           "blob:http%3a//example.com/"_str })
         EXPECT_TRUE(Url::parse(input)->origin()->is_opaque());
     auto unsupported = Url::parse("blob:https://é.example/id"_str).unwrap().origin();
     ASSERT_TRUE(unsupported.is_err());
@@ -670,10 +661,10 @@ TEST(HttpValues, BlobOriginDoesNotExpandHttpTransportScope) {
 
 TEST(HttpValues, UriWireParserDoesNotApplyBrowserRepairs) {
     namespace uri = lihttpto::parser::uri;
-    for (auto input : { "https://example.com/a b"_str,
-                        "https:\\\\example.com/a"_str,
-                        "https://exam\nple.com/a"_str,
-                        "https://example.com/%zz"_str }) {
+    for (auto input : array<ref<str>, 4> { "https://example.com/a b"_str,
+                                           "https:\\\\example.com/a"_str,
+                                           "https://exam\nple.com/a"_str,
+                                           "https://example.com/%zz"_str }) {
         EXPECT_TRUE(lihttpto::Url::parse(input).is_ok());
         EXPECT_TRUE(uri::parse(input).is_err());
     }
@@ -703,7 +694,7 @@ TEST(HttpValues, MessageHeadParsesTypedResponseAndDuplicateFields) {
     auto reason = status.reason();
     ASSERT_TRUE(reason.is_some());
     ASSERT_TRUE((**reason).to_str().ok().is_some());
-    EXPECT_EQ(rstd::cppstd::as_string_view(*(**reason).to_str().ok()), "OK");
+    EXPECT_EQ(*(**reason).to_str().ok(), "OK"_str);
 
     EXPECT_EQ(head.status_code().unwrap().to_primitive(), 200u);
     EXPECT_EQ(head.headers().get_all("set-cookie"_str).len().to_primitive(), 2u);
@@ -775,18 +766,19 @@ TEST(HttpValues, Http1HeadParserComposesAcrossArbitraryChunks) {
     EXPECT_TRUE(exact.unwrap_err().kind().is_InvalidSyntax());
     EXPECT_EQ(exact.unwrap_err().offset().to_primitive(), head_size);
 
-    auto oversized = std::string(lihttpto::Http1HeadParser::MaxHeaderBytes.to_primitive() + 1, 'x');
+    auto oversized = Vec<u8>::make();
+    oversized.resize(lihttpto::Http1HeadParser::MaxHeaderBytes + usize(1), u8('x'));
     auto oversized_parser = lihttpto::Http1HeadParser {};
-    auto oversized_result = oversized_parser.push(as_rstd_str(oversized).as_bytes());
+    auto oversized_result = oversized_parser.push(oversized.as_slice());
     ASSERT_TRUE(oversized_result.is_err());
     EXPECT_TRUE(oversized_result.unwrap_err().kind().is_HeaderTooLarge());
     EXPECT_EQ(oversized_result.unwrap_err().offset().to_primitive(),
               lihttpto::Http1HeadParser::MaxHeaderBytes.to_primitive());
 
-    auto large_body_input = std::string("HTTP/1.1 200 OK\r\n\r\n");
-    large_body_input.append(lihttpto::Http1HeadParser::MaxHeaderBytes.to_primitive() + 1, 'x');
+    auto large_body_input = Vec<u8>::from("HTTP/1.1 200 OK\r\n\r\n"_bytes);
+    large_body_input.extend_from_slice(oversized.as_slice());
     auto large_body_parser = lihttpto::Http1HeadParser {};
-    auto large_body_result = large_body_parser.push(as_rstd_str(large_body_input).as_bytes());
+    auto large_body_result = large_body_parser.push(large_body_input.as_slice());
     ASSERT_TRUE(large_body_result.is_ok());
     EXPECT_TRUE(large_body_result.unwrap().is_Complete());
 }
@@ -843,21 +835,21 @@ TEST(HttpValues, MessageHeadParsesRequestTargetFormsAndTraits) {
         auto head = rstd::move(parsed).unwrap();
         ASSERT_TRUE(head.start().is_Request()) << example.line;
         auto const& request = head.start().as_Request().value;
-        EXPECT_EQ(rstd::cppstd::as_string_view(request.method().as_ref()), example.method);
-        EXPECT_EQ(rstd::cppstd::as_string_view(request.target()), example.target);
+        EXPECT_EQ(request.method().as_ref(), as_rstd_str(example.method));
+        EXPECT_EQ(request.target(), as_rstd_str(example.target));
         EXPECT_EQ(request.version().major().to_primitive(), 1u);
         EXPECT_EQ(request.version().minor().to_primitive(), 1u);
     }
 
     auto method = rstd::from_str<lihttpto::Method>("PATCH"_str);
     ASSERT_TRUE(method.is_ok());
-    EXPECT_EQ(rstd::cppstd::to_string(rstd::format("{}", method.unwrap())), "PATCH");
+    EXPECT_EQ(rstd::format("{}", method.unwrap()).as_str(), "PATCH"_str);
     auto version = rstd::from_str<lihttpto::MessageVersion>("HTTP/2.0"_str);
     ASSERT_TRUE(version.is_ok());
-    EXPECT_EQ(rstd::cppstd::to_string(rstd::format("{}", version.unwrap())), "HTTP/2.0");
+    EXPECT_EQ(rstd::format("{}", version.unwrap()).as_str(), "HTTP/2.0"_str);
     auto status = rstd::from_str<lihttpto::StatusCode>("418"_str);
     ASSERT_TRUE(status.is_ok());
-    EXPECT_EQ(rstd::cppstd::to_string(rstd::format("{}", status.unwrap())), "418");
+    EXPECT_EQ(rstd::format("{}", status.unwrap()).as_str(), "418"_str);
 }
 
 TEST(HttpValues, MessageHeadReportsStartAndFieldErrors) {
@@ -866,36 +858,29 @@ TEST(HttpValues, MessageHeadReportsStartAndFieldErrors) {
     EXPECT_TRUE(invalid_status.unwrap_err().kind().is_InvalidStartLine());
     EXPECT_EQ(invalid_status.unwrap_err().offset().to_primitive(), 9u);
 
-    auto invalid_target_text = std::string { "GET /" };
-    invalid_target_text.push_back(static_cast<char>(0xff));
-    invalid_target_text.append(" HTTP/1.1\r\n\r\n");
-    auto invalid_target = lihttpto::MessageHead::parse(
-        rstd::slice<u8>::from_raw_parts(reinterpret_cast<const byte*>(invalid_target_text.data()),
-                                        usize(invalid_target_text.size())));
+    auto invalid_target = lihttpto::MessageHead::parse("GET /\xff HTTP/1.1\r\n\r\n"_bytes);
     ASSERT_TRUE(invalid_target.is_err());
     EXPECT_TRUE(invalid_target.unwrap_err().kind().is_InvalidStartLine());
     EXPECT_EQ(invalid_target.unwrap_err().offset().to_primitive(), 5u);
 
-    auto bad_name_text = std::string { "HTTP/1.1 200 OK\r\nBad Name: value\r\n\r\n" };
-    auto bad_name      = lihttpto::MessageHead::parse(rstd::slice<u8>::from_raw_parts(
-        reinterpret_cast<const byte*>(bad_name_text.data()), usize(bad_name_text.size())));
+    auto bad_name_text = "HTTP/1.1 200 OK\r\nBad Name: value\r\n\r\n"_str;
+    auto bad_name      = lihttpto::MessageHead::parse(bad_name_text.as_bytes());
     ASSERT_TRUE(bad_name.is_err());
     EXPECT_TRUE(bad_name.unwrap_err().kind().is_InvalidHeaderLine());
-    EXPECT_EQ(bad_name.unwrap_err().offset().to_primitive(), bad_name_text.find("Bad Name") + 3);
+    EXPECT_EQ(bad_name.unwrap_err().offset(),
+              bad_name_text.find("Bad Name"_str).unwrap() + usize(3));
 
-    auto obs_fold_text = std::string { "HTTP/1.1 200 OK\r\nX: value\r\n continuation\r\n\r\n" };
-    auto obs_fold      = lihttpto::MessageHead::parse(rstd::slice<u8>::from_raw_parts(
-        reinterpret_cast<const byte*>(obs_fold_text.data()), usize(obs_fold_text.size())));
+    auto obs_fold_text = "HTTP/1.1 200 OK\r\nX: value\r\n continuation\r\n\r\n"_str;
+    auto obs_fold      = lihttpto::MessageHead::parse(obs_fold_text.as_bytes());
     ASSERT_TRUE(obs_fold.is_err());
     EXPECT_TRUE(obs_fold.unwrap_err().kind().is_InvalidHeaderLine());
-    EXPECT_EQ(obs_fold.unwrap_err().offset().to_primitive(), obs_fold_text.find(" continuation"));
+    EXPECT_EQ(obs_fold.unwrap_err().offset(), obs_fold_text.find(" continuation"_str).unwrap());
 
-    auto bare_cr_text = std::string { "HTTP/1.1 200 OK\r\nX: safe\rbad\r\n\r\n" };
-    auto bare_cr      = lihttpto::MessageHead::parse(rstd::slice<u8>::from_raw_parts(
-        reinterpret_cast<const byte*>(bare_cr_text.data()), usize(bare_cr_text.size())));
+    auto bare_cr_text = "HTTP/1.1 200 OK\r\nX: safe\rbad\r\n\r\n"_str;
+    auto bare_cr      = lihttpto::MessageHead::parse(bare_cr_text.as_bytes());
     ASSERT_TRUE(bare_cr.is_err());
     EXPECT_TRUE(bare_cr.unwrap_err().kind().is_InvalidHeaderLine());
-    EXPECT_EQ(bare_cr.unwrap_err().offset().to_primitive(), bare_cr_text.find("\rbad"));
+    EXPECT_EQ(bare_cr.unwrap_err().offset(), bare_cr_text.find("\rbad"_str).unwrap());
 }
 
 TEST(HttpValues, HttpErrorDisplayTraitsDescribeStableKinds) {
@@ -907,14 +892,13 @@ TEST(HttpValues, HttpErrorDisplayTraitsDescribeStableKinds) {
     auto query   = QueryError { QueryErrorKind::InvalidUtf8(), usize(2) };
     auto cookie  = CookieError { CookieErrorKind::InvalidAttribute(), usize(5) };
 
-    EXPECT_EQ(rstd::cppstd::to_string(rstd::format("{}", url)), "unsupported URL scheme");
-    EXPECT_EQ(rstd::cppstd::to_string(rstd::format("{}", header)), "invalid HTTP field value");
-    EXPECT_EQ(rstd::cppstd::to_string(rstd::format("{}", message)),
-              "HTTP field section is too large");
-    EXPECT_EQ(rstd::cppstd::to_string(rstd::format("{}", query)), "invalid UTF-8 in query");
-    EXPECT_EQ(rstd::cppstd::to_string(rstd::format("{}", cookie)), "invalid cookie attribute");
+    EXPECT_EQ(rstd::format("{}", url).as_str(), "unsupported URL scheme"_str);
+    EXPECT_EQ(rstd::format("{}", header).as_str(), "invalid HTTP field value"_str);
+    EXPECT_EQ(rstd::format("{}", message).as_str(), "HTTP field section is too large"_str);
+    EXPECT_EQ(rstd::format("{}", query).as_str(), "invalid UTF-8 in query"_str);
+    EXPECT_EQ(rstd::format("{}", cookie).as_str(), "invalid cookie attribute"_str);
 
-    EXPECT_EQ(rstd::cppstd::to_string(rstd::format("{:?}", url)), "unsupported URL scheme");
+    EXPECT_EQ(rstd::format("{:?}", url).as_str(), "unsupported URL scheme"_str);
     EXPECT_TRUE(rstd::as<rstd::error::Error>(url).source().is_none());
     EXPECT_TRUE(rstd::as<rstd::error::Error>(header).source().is_none());
     EXPECT_TRUE(rstd::as<rstd::error::Error>(message).source().is_none());

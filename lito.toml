@@ -9,26 +9,23 @@ archive = "lihttpto"
 
 [[test]]
 name = "lihttpto-tests"
-sources = ["tests/main.cpp", "tests/header.cpp", "tests/cgi.cpp", "tests/body_transfer.cpp", "tests/request_line.cpp", "tests/request_head.cpp", "tests/request_body.cpp", "tests/response.cpp", "tests/connection.cpp", "tests/request_target.cpp", "tests/server.cpp"]
-link-stdlib = false
-
-[[test]]
-name = "lihttpto-http-values-tests"
-sources = ["tests/main.cpp", "tests/http_values.cpp"]
-
-[[test]]
-name = "lihttpto-event-stream-tests"
-sources = ["tests/main.cpp", "tests/event_stream.cpp"]
-link-stdlib = false
-
-[[test]]
-name = "lihttpto-upgrade-tests"
-sources = ["tests/main.cpp", "tests/upgrade.cpp"]
-link-stdlib = false
-
-[[test]]
-name = "lihttpto-url-baseline"
-sources = ["tests/main.cpp", "tests/url_baseline.cpp"]
+sources = [
+  "tests/main.cpp",
+  "tests/header.cpp",
+  "tests/cgi.cpp",
+  "tests/body_transfer.cpp",
+  "tests/request_line.cpp",
+  "tests/request_head.cpp",
+  "tests/request_body.cpp",
+  "tests/response.cpp",
+  "tests/connection.cpp",
+  "tests/request_target.cpp",
+  "tests/server.cpp",
+  "tests/http_values.cpp",
+  "tests/event_stream.cpp",
+  "tests/upgrade.cpp",
+  "tests/url_baseline.cpp",
+]
 link-stdlib = false
 
 [profile.base]
@@ -41,6 +38,5 @@ rstd-std = { version = "0.1.2", pub = true }
 
 [dev-dependencies]
 rstd-json = { version = "0.1.2" }
-rstd-cppstd = { version = "0.1.2" }
 rstd-test = { version = "0.1.2" }
 rstd-nostd = { version = "0.1.2", usage = "link" }
