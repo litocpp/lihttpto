@@ -164,7 +164,10 @@ private:
 };
 
 export class Http1HeadEvent {
-    RSTD_ENUM(Http1HeadEvent, (NeedMore), (Complete, (MessageHead head; usize consumed;)))
+    // consumed is cumulative; input_consumed locates the remainder in the current push.
+    RSTD_ENUM(Http1HeadEvent,
+              (NeedMore),
+              (Complete, (MessageHead head; usize consumed; usize input_consumed;)))
 };
 
 export class Http1HeadParser {

@@ -22,6 +22,11 @@ sources = ["tests/main.cpp", "tests/event_stream.cpp"]
 link-stdlib = false
 
 [[test]]
+name = "lihttpto-upgrade-tests"
+sources = ["tests/main.cpp", "tests/upgrade.cpp"]
+link-stdlib = false
+
+[[test]]
 name = "lihttpto-url-baseline"
 sources = ["tests/main.cpp", "tests/url_baseline.cpp"]
 link-stdlib = false

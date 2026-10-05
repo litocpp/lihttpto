@@ -12,7 +12,8 @@ enum class BodyKind
 {
     None,
     FixedLength,
-    Chunked
+    Chunked,
+    UntilEof
 };
 struct BodyFraming {
     BodyKind kind { BodyKind::None };
@@ -58,7 +59,8 @@ auto parse_length(slice<u8> bytes) -> Result<u64, DecodeError> {
     return Ok(length);
 }
 
-auto parse_connection(slice<u8> bytes, bool& close, bool& persistent) -> bool {
+auto parse_connection(slice<u8> bytes, bool& close, bool& persistent, bool* upgrade = nullptr)
+    -> bool {
     rstd::parse::TextCursor cursor { rstd::parse::Input<u8>(bytes) };
     while (! cursor.is_eof()) {
         (void)rstd::parse::consume_while(cursor, ows);
@@ -69,6 +71,7 @@ auto parse_connection(slice<u8> bytes, bool& close, bool& persistent) -> bool {
         auto value = cursor.view(*token);
         close      = close || ascii_equal(value, "close"_str);
         persistent = persistent || ascii_equal(value, "keep-alive"_str);
+        if (upgrade) *upgrade = *upgrade || ascii_equal(value, "upgrade"_str);
         (void)rstd::parse::consume_while(cursor, ows);
         if (! cursor.is_eof() && rstd::parse::consume_literal(cursor, ","_str).is_none())
             return false;

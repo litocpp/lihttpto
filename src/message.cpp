@@ -223,9 +223,10 @@ auto Http1HeadParser::push(slice<u8> input) -> rstd::Result<Http1HeadEvent, Http
     if (complete_ || failed_) {
         return Err(HttpParseError { HttpParseErrorKind::InvalidSyntax(), line_start_ });
     }
-    failed_        = true;
-    auto available = max_header_bytes_ - buffer_.len();
-    auto count     = input.len() < available ? input.len() : available;
+    failed_             = true;
+    auto previous_bytes = buffer_.len();
+    auto available      = max_header_bytes_ - buffer_.len();
+    auto count          = input.len() < available ? input.len() : available;
     buffer_.extend_from_slice(slice<u8>::from_raw_parts(input.as_raw_ptr(), count));
 
     while (scan_ + usize(1) < buffer_.len()) {
@@ -257,7 +258,9 @@ auto Http1HeadParser::push(slice<u8> input) -> rstd::Result<Http1HeadEvent, Http
         if (line.len() == usize(2)) {
             complete_ = true;
             return Ok(Http1HeadEvent::Complete(
-                MessageHead { rstd::move(start_).unwrap(), rstd::move(headers_) }, line_start_));
+                MessageHead { rstd::move(start_).unwrap(), rstd::move(headers_) },
+                line_start_,
+                line_start_ - previous_bytes));
         }
 
         auto content = slice<u8>::from_raw_parts(line.as_raw_ptr(), line.len() - usize(2));

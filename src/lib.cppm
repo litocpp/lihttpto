@@ -14,3 +14,4 @@ export import :server;
 export import :query;
 export import :body_transfer;
 export import :event_stream;
+export import :upgrade;

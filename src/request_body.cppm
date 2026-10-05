@@ -85,10 +85,11 @@ auto forbidden_trailer(ref<str> name) -> bool {
 
 export namespace lihttpto
 {
-class RequestBodyDecoder {
+class BodyDecoder {
     enum class State
     {
         Fixed,
+        UntilEof,
         Size,
         Data,
         DataCr,
@@ -115,11 +116,12 @@ class RequestBodyDecoder {
     }
 
 public:
-    explicit RequestBodyDecoder(BodyFraming framing, BodyLimits limits = {})
+    explicit BodyDecoder(BodyFraming framing, BodyLimits limits = {})
         : state_(framing.kind == BodyKind::Chunked ? State::Size : State::Complete),
           limits_(limits),
           size_line_(limits.chunk_line),
           trailer_line_(limits.trailer_line) {
+        if (framing.kind == BodyKind::UntilEof) state_ = State::UntilEof;
         if (framing.kind == BodyKind::FixedLength) {
             remaining_ = framing.length;
             if (remaining_ > limits.data_bytes) {
@@ -134,6 +136,12 @@ public:
         if (state_ == State::Failed) return Err(error_);
         if (state_ == State::Complete)
             return Ok(BodyProgress { usize(), {}, DecodeStatus::Complete });
+        if (state_ == State::UntilEof) {
+            if (u64(input.len().to_primitive()) > limits_.data_bytes - total_)
+                return fail(DecodeError::TooLarge);
+            total_ += u64(input.len().to_primitive());
+            return Ok(BodyProgress { input.len(), input, DecodeStatus::NeedMore });
+        }
         rstd::parse::TextCursor cursor { rstd::parse::Input<u8>(input) };
         while (! cursor.is_eof()) {
             if (state_ == State::Fixed || state_ == State::Data) {
@@ -197,6 +205,7 @@ public:
 
     auto finish() -> Result<DecodeStatus, DecodeError> {
         if (state_ == State::Failed) return Err(error_);
+        if (state_ == State::UntilEof) state_ = State::Complete;
         if (state_ != State::Complete) {
             state_ = State::Failed;
             error_ = DecodeError::Truncated;
@@ -211,4 +220,5 @@ public:
         return Some(rstd::move(trailers_));
     }
 };
+using RequestBodyDecoder = BodyDecoder;
 } // namespace lihttpto
