@@ -1,0 +1,31 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lihttpto-registry-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Publish packages
+        uses: hypengw/lito-action@v0.1.0
+        with:
+          command: publish
+          token: ${{ secrets.LITO_TOKEN }}
+          package: lihttpto
