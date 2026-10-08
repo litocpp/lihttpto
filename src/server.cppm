@@ -108,7 +108,7 @@ auto run_connection(rstd::net::TcpStream stream,
         auto head    = rstd::move(*request).unwrap();
         auto handled = co_await (*handler)(connection, head, shutdown);
         if (handled.is_err()) co_return false;
-        if (connection.is_closed()) co_return true;
+        if (connection.is_closed() || connection.is_upgraded()) co_return true;
         if (! connection.ready_for_request()) co_return false;
     }
     co_return true;
@@ -119,6 +119,7 @@ export namespace lihttpto
 {
 // Handler and its shared state must support concurrent calls and cooperative
 // cancellation.
+// Upgraded IO must remain owned by the handler until it returns.
 template<typename Handler>
 auto serve(rstd::net::TcpListener listener,
            Arc<Handler>           handler,

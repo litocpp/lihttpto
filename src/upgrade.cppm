@@ -1,6 +1,7 @@
 export module lihttpto:upgrade;
 export import :message;
 export import :request_body;
+export import :request_head;
 import :response;
 
 using namespace rstd::prelude;
@@ -194,6 +195,82 @@ public:
         if (! upgrade || close) return Err(UpgradeError::InvalidConnection);
         if (! protocols) return Err(UpgradeError::InvalidProtocol);
         return Ok(empty {});
+    }
+};
+
+class UpgradeOffer {
+    Vec<UpgradeProtocol> protocols_;
+    explicit UpgradeOffer(Vec<UpgradeProtocol> protocols): protocols_(rstd::move(protocols)) {}
+
+public:
+    static auto parse(const RequestHead& request) -> Result<UpgradeOffer, UpgradeError> {
+        if (request.line.version != Version::Http11) return Err(UpgradeError::InvalidVersion);
+        if (request.body.kind != BodyKind::None &&
+            ! (request.body.kind == BodyKind::FixedLength && request.body.length == u64()))
+            return Err(UpgradeError::InvalidFraming);
+        bool                 upgrade = false, close = false, persistent = false;
+        Vec<UpgradeProtocol> protocols;
+        for (const auto& header : request.headers) {
+            if (header.name.matches("expect"_str)) return Err(UpgradeError::InvalidRequest);
+            if (header.name.matches("connection"_str) &&
+                ! parse_connection(header.value.as_slice(), close, persistent, &upgrade))
+                return Err(UpgradeError::InvalidConnection);
+            if (! header.name.matches("upgrade"_str)) continue;
+            rstd::parse::TextCursor cursor { rstd::parse::Input<u8>(header.value.as_slice()) };
+            while (! cursor.is_eof()) {
+                (void)rstd::parse::consume_while(cursor, ows);
+                if (cursor.is_eof()) break;
+                if (rstd::parse::consume_literal(cursor, ","_str).is_some()) continue;
+                auto name = rstd::parse::consume_while_one(cursor, token_byte);
+                if (name.is_none()) return Err(UpgradeError::InvalidProtocol);
+                Option<ref<str>> version;
+                if (rstd::parse::consume_literal(cursor, "/"_str).is_some()) {
+                    auto parsed = rstd::parse::consume_while_one(cursor, token_byte);
+                    if (parsed.is_none()) return Err(UpgradeError::InvalidProtocol);
+                    version = Some(rstd::str_::from_utf8(cursor.view(*parsed)).unwrap());
+                }
+                auto protocol = UpgradeProtocol::make(
+                    rstd::str_::from_utf8(cursor.view(*name)).unwrap(), version);
+                if (protocol.is_err()) return Err(protocol.unwrap_err());
+                protocols.push(rstd::move(protocol).unwrap());
+                (void)rstd::parse::consume_while(cursor, ows);
+                if (! cursor.is_eof() && rstd::parse::consume_literal(cursor, ","_str).is_none())
+                    return Err(UpgradeError::InvalidProtocol);
+            }
+        }
+        if (! upgrade || close) return Err(UpgradeError::InvalidConnection);
+        if (protocols.is_empty()) return Err(UpgradeError::InvalidProtocol);
+        return Ok(UpgradeOffer { rstd::move(protocols) });
+    }
+
+    auto response(const UpgradeProtocol& selected,
+                  const Headers&         headers = {},
+                  usize limit = usize(65536)) const -> Result<rstd::bytes::Bytes, UpgradeError> {
+        auto protocol = selected.encode();
+        bool offered  = false;
+        for (const auto& candidate : protocols_)
+            offered = offered || candidate.matches(protocol.as_str().as_bytes());
+        if (! offered) return Err(UpgradeError::InvalidProtocol);
+        for (const auto& header : headers)
+            for (auto reserved : array<ref<str>, 5> { "connection"_str,
+                                                      "upgrade"_str,
+                                                      "content-length"_str,
+                                                      "transfer-encoding"_str,
+                                                      "trailer"_str })
+                if (header.name.matches(reserved)) return Err(UpgradeError::ReservedHeader);
+        Vec<u8> bytes;
+        auto    append = [&](ref<str> text) {
+            return append_bytes(bytes, text.as_bytes(), limit);
+        };
+        if (! append("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: "_str) ||
+            ! append(protocol.as_str()) || ! append("\r\n"_str))
+            return Err(UpgradeError::TooLarge);
+        for (const auto& header : headers)
+            if (! append(header.name.as_str()) || ! append(": "_str) ||
+                ! append_bytes(bytes, header.value.as_slice(), limit) || ! append("\r\n"_str))
+                return Err(UpgradeError::TooLarge);
+        if (! append("\r\n"_str)) return Err(UpgradeError::TooLarge);
+        return Ok(rstd::bytes::Bytes::copy_from_slice(bytes.as_slice()));
     }
 };
 } // namespace lihttpto

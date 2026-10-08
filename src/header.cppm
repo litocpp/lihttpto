@@ -60,6 +60,27 @@ public:
         if (text.is_err()) return Err(HeaderError::InvalidText());
         return Ok(*text);
     }
+    auto tokens() const -> Result<Vec<String>, HeaderError> {
+        rstd::parse::TextCursor cursor { rstd::parse::Input<u8>(bytes_.as_slice()) };
+        Vec<String>             result;
+        auto                    whitespace = [](u8 byte) {
+            return byte == u8(' ') || byte == u8('\t');
+        };
+        for (;;) {
+            (void)rstd::parse::consume_while(cursor, whitespace);
+            if (cursor.is_eof()) break;
+            if (rstd::parse::consume_literal(cursor, ","_str).is_some()) continue;
+            auto token = rstd::parse::consume_while_one(cursor, token_byte);
+            if (token.is_none()) return Err(HeaderError::InvalidValue().at(cursor.position()));
+            result.push(String::make(rstd::str_::from_utf8(cursor.view(*token)).unwrap()));
+            (void)rstd::parse::consume_while(cursor, whitespace);
+            if (cursor.is_eof()) break;
+            if (rstd::parse::consume_literal(cursor, ","_str).is_none())
+                return Err(HeaderError::InvalidValue().at(cursor.position()));
+        }
+        if (result.is_empty()) return Err(HeaderError::InvalidValue());
+        return Ok(rstd::move(result));
+    }
 };
 struct Header : public DefaultInClass<Header, Clone> {
     HeaderName  name;

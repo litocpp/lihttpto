@@ -130,3 +130,44 @@ TEST(Upgrade, ResponseFramingAndInformationalPolicy) {
     EXPECT_TRUE(complete.feed("abc"_str.as_bytes()).is_ok());
     EXPECT_TRUE(complete.finish().is_ok());
 }
+
+TEST(Upgrade, ServerSelectsOnlyOfferedProtocols) {
+    RequestHeadDecoder decoder;
+    ASSERT_TRUE(
+        decoder
+            .feed(
+                "GET /ws HTTP/1.1\r\nHost: x\r\nConnection: keep-alive, upgrade\r\nUpgrade: sample/vA, WebSocket\r\n\r\n"_str
+                    .as_bytes())
+            .is_ok());
+    auto offer = UpgradeOffer::parse(*decoder.take());
+    ASSERT_TRUE(offer.is_ok());
+    auto    selected = UpgradeProtocol::make("websocket"_str).unwrap();
+    Headers headers;
+    headers.add("Sec-WebSocket-Accept"_str, "test"_str).unwrap();
+    auto reply = offer->response(selected, headers);
+    ASSERT_TRUE(reply.is_ok());
+    EXPECT_TRUE(
+        rstd::str_::from_utf8(reply->as_slice()).unwrap() ==
+        "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: test\r\n\r\n"_str);
+    EXPECT_TRUE(
+        offer->response(UpgradeProtocol::make("sample"_str, Some("va"_str)).unwrap()).is_err());
+    EXPECT_TRUE(offer->response(selected, {}, usize(16)).unwrap_err() == UpgradeError::TooLarge);
+    headers.add("Content-Length"_str, "0"_str).unwrap();
+    EXPECT_TRUE(offer->response(selected, headers).unwrap_err() == UpgradeError::ReservedHeader);
+}
+
+TEST(Upgrade, ServerRejectsInvalidOffers) {
+    for (auto fields : array<ref<str>, 7> {
+             "Connection: close, upgrade\r\nUpgrade: websocket\r\n"_str,
+             "Upgrade: websocket\r\n"_str,
+             "Connection: upgrade\r\n"_str,
+             "Connection: upgrade\r\nUpgrade: websocket/\r\n"_str,
+             "Connection: upgrade\r\nUpgrade: websocket\r\nContent-Length: 1\r\n"_str,
+             "Connection: upgrade\r\nUpgrade: websocket\r\nTransfer-Encoding: chunked\r\n"_str,
+             "Connection: upgrade\r\nUpgrade: websocket\r\nExpect: 100-continue\r\n"_str }) {
+        RequestHeadDecoder decoder;
+        auto               wire = rstd::format("GET /ws HTTP/1.1\r\nHost: x\r\n{}\r\n", fields);
+        ASSERT_TRUE(decoder.feed(wire.as_str().as_bytes()).is_ok());
+        EXPECT_TRUE(UpgradeOffer::parse(*decoder.take()).is_err());
+    }
+}

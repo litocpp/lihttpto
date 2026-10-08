@@ -14,6 +14,53 @@ struct Echo {
         co_return co_await connection.respond(response, true);
     }
 };
+struct UpgradeEcho {
+    bool wait_for_close;
+    auto operator()(Connection& connection, const RequestHead&, const Shutdown&) const
+        -> rstd::async::coro<Result<empty, ConnectionError>> {
+        auto prepared = connection.prepare_upgrade(UpgradeProtocol::make("sample"_str).unwrap());
+        if (prepared.is_err()) co_return Err(ConnectionError { ConnectionErrorKind::State });
+        auto upgraded = co_await connection.upgrade(rstd::move(prepared).unwrap());
+        if (upgraded.is_err()) co_return Err(rstd::move(upgraded).unwrap_err());
+        auto written = co_await rstd::async::io::write_all(upgraded->stream, upgraded->pending);
+        if (written.is_err()) co_return Err(ConnectionError { ConnectionErrorKind::Io });
+        if (wait_for_close) {
+            auto buffer = rstd::bytes::BytesMut::with_capacity(usize(16));
+            auto read   = co_await rstd::async::io::read(upgraded->stream, buffer);
+            if (read.is_err()) co_return Err(ConnectionError { ConnectionErrorKind::Io });
+        }
+        co_return Ok(empty {});
+    }
+};
+auto upgraded_server(rstd::net::TcpListener listener, rstd::net::SocketAddr address, bool wait)
+    -> rstd::async::coro<bool> {
+    auto         stop = Shutdown::make().unwrap();
+    ServerLimits limits;
+    limits.shutdown_timeout = rstd::time::Duration::from_millis(u64(5));
+    auto task               = rstd::async::AbortOnDropHandle { rstd::async::spawn(serve(
+        rstd::move(listener), rstd::sync::Arc<UpgradeEcho>::make(wait), stop.clone(), limits)) };
+    auto connected          = co_await rstd::net::TcpStream::connect(address);
+    if (connected.is_err()) co_return false;
+    auto client = rstd::move(connected).unwrap();
+    auto bytes  = rstd::bytes::Bytes::copy_from_slice(
+        "GET /ws HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: sample\r\n\r\nhello"_str
+            .as_bytes());
+    if ((co_await rstd::async::io::write_all(client, bytes)).is_err()) co_return false;
+    auto expected =
+        "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: sample\r\n\r\nhello"_str;
+    auto buffer = rstd::bytes::BytesMut::with_capacity(expected.len());
+    if ((co_await rstd::async::io::read_exact(client, buffer, expected.len())).is_err() ||
+        buffer.as_slice() != expected.as_bytes())
+        co_return false;
+    if (stop.request_stop().is_err()) co_return false;
+    auto joined = co_await rstd::move(task);
+    if (joined.is_err() || joined->is_err()) co_return false;
+    auto report = rstd::move(*joined).unwrap();
+    buffer.clear();
+    auto eof = co_await rstd::async::io::read(client, buffer);
+    co_return report.accepted == usize(1) && report.failed == usize() &&
+        report.cancelled == usize(wait ? 1 : 0) && eof.is_ok() && *eof == usize();
+}
 struct Gated {
     rstd::async::Notify                  entered;
     rstd::async::Notify                  release;
@@ -181,4 +228,14 @@ TEST(Server, MultiThreadDispatchAndShutdown) {
 }
 TEST(Server, MultiThreadGraceCancellation) {
     check(forced, true);
+}
+TEST(ServerUpgrade, HandoffEndsHttpDispatch) {
+    check([](auto listener, auto address) {
+        return upgraded_server(rstd::move(listener), address, false);
+    });
+}
+TEST(ServerUpgrade, ShutdownCancelsUpgradedHandler) {
+    check([](auto listener, auto address) {
+        return upgraded_server(rstd::move(listener), address, true);
+    });
 }

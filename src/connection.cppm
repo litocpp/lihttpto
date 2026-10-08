@@ -3,6 +3,7 @@ module;
 export module lihttpto:connection;
 export import :request_body;
 export import :response;
+export import :upgrade;
 
 import rstd;
 using namespace rstd::prelude;
@@ -59,6 +60,24 @@ auto response_error(ResponseWriteError error) -> ConnectionError {
 
 export namespace lihttpto
 {
+class Connection;
+class PreparedUpgrade {
+    friend class Connection;
+    rstd::sync::Arc<empty> identity_;
+    rstd::bytes::Bytes     response_;
+    PreparedUpgrade(rstd::sync::Arc<empty> identity, rstd::bytes::Bytes response)
+        : identity_(rstd::move(identity)), response_(rstd::move(response)) {}
+
+public:
+    PreparedUpgrade(const PreparedUpgrade&)                    = delete;
+    auto operator=(const PreparedUpgrade&) -> PreparedUpgrade& = delete;
+    PreparedUpgrade(PreparedUpgrade&&) noexcept                = default;
+};
+struct UpgradedConnection {
+    rstd::net::TcpStream stream;
+    // Consume these bytes before reading from the stream.
+    rstd::bytes::Bytes pending;
+};
 class Connection {
     enum class State
     {
@@ -69,6 +88,7 @@ class Connection {
         Ready,
         Writing,
         Streaming,
+        Upgraded,
         Closed
     };
     State                        state_ { State::Idle };
@@ -76,6 +96,9 @@ class Connection {
     ConnectionLimits             limits_;
     rstd::bytes::BytesMut        buffer_ { rstd::bytes::BytesMut::with_capacity(usize(8192)) };
     Option<alloc::boxed::Box<RequestBodyDecoder>> body_;
+    Option<UpgradeOffer>                          upgrade_;
+    Option<rstd::sync::Arc<empty>>                upgrade_identity_;
+    UpgradeError                                  upgrade_error_ { UpgradeError::InvalidRequest };
     String                                        method_;
     Version                                       version_ { Version::Http11 };
     bool                                          keep_alive_ {};
@@ -137,6 +160,7 @@ public:
         stream_ = None();
     }
     auto is_closed() const -> bool { return state_ == State::Closed; }
+    auto is_upgraded() const -> bool { return state_ == State::Upgraded; }
     auto ready_for_request() const -> bool { return state_ == State::Idle; }
 
     // Operations are sequential; cancelling an active operation closes this
@@ -169,7 +193,14 @@ public:
             if (progress.is_err()) co_return Err(decode_error(progress.unwrap_err()));
             buffer_.advance(progress->consumed);
             if (progress->status != DecodeStatus::Complete) continue;
-            auto head   = decoder.take().unwrap();
+            auto head         = decoder.take().unwrap();
+            auto offer        = UpgradeOffer::parse(head);
+            upgrade_          = None();
+            upgrade_identity_ = None();
+            if (offer.is_ok())
+                upgrade_ = Some(rstd::move(offer).unwrap());
+            else
+                upgrade_error_ = offer.unwrap_err();
             bool expect = false;
             for (const auto& header : head.headers) {
                 if (! ascii_equal(header.name.as_str().as_bytes(), "expect"_str)) continue;
@@ -256,6 +287,37 @@ public:
     auto take_trailers() -> Option<Headers> {
         if (state_ != State::Ready) return None();
         return (*body_)->take_trailers();
+    }
+
+    auto prepare_upgrade(const UpgradeProtocol& protocol, const Headers& headers = {})
+        -> Result<PreparedUpgrade, UpgradeError> {
+        if (state_ != State::Ready) return Err(UpgradeError::InvalidRequest);
+        if (upgrade_.is_none()) return Err(upgrade_error_);
+        auto response = upgrade_->response(protocol, headers, limits_.head.total_bytes);
+        if (response.is_err()) return Err(response.unwrap_err());
+        if (upgrade_identity_.is_none()) upgrade_identity_ = Some(rstd::sync::Arc<empty>::make());
+        return Ok(PreparedUpgrade { upgrade_identity_->clone(), rstd::move(response).unwrap() });
+    }
+
+    auto upgrade(PreparedUpgrade prepared)
+        -> rstd::async::coro<Result<UpgradedConnection, ConnectionError>> {
+        if (state_ != State::Ready || upgrade_identity_.is_none() ||
+            ! rstd::sync::Arc<empty>::ptr_eq(prepared.identity_, *upgrade_identity_))
+            co_return Err(connection_error(ConnectionErrorKind::State));
+        state_ = State::Writing;
+        Operation operation { *this };
+        rstd_co_try(
+            co_await write_with_deadline(
+                *stream_, prepared.response_, rstd::time::Instant::now(), limits_.write_timeout),
+            response_error);
+        auto pending = rstd::bytes::Bytes::copy_from_slice(buffer_.as_slice());
+        buffer_.clear();
+        body_              = None();
+        upgrade_           = None();
+        upgrade_identity_  = None();
+        state_             = State::Upgraded;
+        operation.complete = true;
+        co_return Ok(UpgradedConnection { stream_.take().unwrap(), rstd::move(pending) });
     }
 
     auto respond(const Response& response, bool close_after = false)

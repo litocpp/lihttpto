@@ -4,6 +4,16 @@ using namespace rstd::prelude;
 using namespace rstd::literals;
 using namespace lihttpto;
 
+TEST(Header, TokenListParsingUsesHttpGrammar) {
+    auto tokens = HeaderValue::make(" , one,\tTwo ,, three, "_str.as_bytes()).unwrap().tokens();
+    ASSERT_TRUE(tokens.is_ok());
+    ASSERT_TRUE(tokens->len() == usize(3));
+    EXPECT_TRUE((*tokens)[usize(0)].as_str() == "one"_str);
+    EXPECT_TRUE((*tokens)[usize(1)].as_str() == "Two"_str);
+    for (auto invalid : array<ref<str>, 4> { ""_str, ", ,"_str, "one two"_str, "one, \"two\""_str })
+        EXPECT_TRUE(HeaderValue::make(invalid.as_bytes()).unwrap().tokens().is_err());
+}
+
 TEST(Header, ConstructionValidatesNamesAndPreservesRawValues) {
     auto name = HeaderName::make("X-Custom"_str).unwrap();
     EXPECT_TRUE(name.matches("x-CUSTOM"_str));

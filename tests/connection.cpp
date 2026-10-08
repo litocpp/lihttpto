@@ -289,6 +289,75 @@ void check(F function) {
 TEST(Connection, PipelinedRequestsAndStateOrder) {
     check(pipeline);
 }
+
+TEST(ConnectionUpgrade, TransfersStreamAndBufferedBytesOnce) {
+    check([](rstd::net::TcpStream server, rstd::net::TcpStream& client) -> rstd::async::coro<bool> {
+        Connection connection(rstd::move(server));
+        auto       protocol = UpgradeProtocol::make("websocket"_str).unwrap();
+        if (connection.prepare_upgrade(protocol).is_ok()) co_return false;
+        if (! (co_await send(
+                client,
+                "GET /ws HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\nfirst-frame"_str)))
+            co_return false;
+        auto head = co_await connection.read_request();
+        if (head.is_err() || head->is_none()) co_return false;
+        auto prepared  = connection.prepare_upgrade(protocol);
+        auto duplicate = connection.prepare_upgrade(protocol);
+        if (prepared.is_err() || duplicate.is_err()) co_return false;
+        auto result = co_await connection.upgrade(rstd::move(prepared).unwrap());
+        if (result.is_err() || ! connection.is_upgraded()) co_return false;
+        if ((co_await connection.upgrade(rstd::move(duplicate).unwrap())).is_ok()) co_return false;
+        if ((co_await connection.read_request()).is_ok()) co_return false;
+        if (! (co_await receive(
+                client,
+                "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n"_str)))
+            co_return false;
+        if (rstd::str_::from_utf8(result->pending.as_slice()).unwrap() != "first-frame"_str)
+            co_return false;
+        connection.close();
+        if (! (co_await send(result->stream, "reply"_str)) ||
+            ! (co_await receive(client, "reply"_str)))
+            co_return false;
+        co_return (co_await send(client, "next"_str)) &&
+            (co_await receive(result->stream, "next"_str));
+    });
+}
+
+TEST(ConnectionUpgrade, PreparedResponseCannotCrossRequests) {
+    check([](rstd::net::TcpStream server, rstd::net::TcpStream& client) -> rstd::async::coro<bool> {
+        Connection connection(rstd::move(server));
+        if (! (co_await send(
+                client,
+                "GET /ws HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\nGET / HTTP/1.1\r\nHost: x\r\n\r\n"_str)))
+            co_return false;
+        if ((co_await connection.read_request()).is_err()) co_return false;
+        auto prepared = connection.prepare_upgrade(UpgradeProtocol::make("websocket"_str).unwrap());
+        if (prepared.is_err() || (co_await connection.respond(Response {})).is_err())
+            co_return false;
+        if ((co_await connection.read_request()).is_err()) co_return false;
+        auto stale = co_await connection.upgrade(rstd::move(prepared).unwrap());
+        if (stale.is_ok() || stale.unwrap_err().kind != ConnectionErrorKind::State) co_return false;
+        co_return (co_await connection.respond(Response {}, true)).is_ok();
+    });
+}
+
+TEST(ConnectionUpgrade, WriteTimeoutClosesWithoutHandoff) {
+    check([](rstd::net::TcpStream server, rstd::net::TcpStream& client) -> rstd::async::coro<bool> {
+        ConnectionLimits limits;
+        limits.write_timeout = rstd::time::Duration::from_secs(u64());
+        Connection connection(rstd::move(server), limits);
+        if (! (co_await send(
+                client,
+                "GET /ws HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n"_str)))
+            co_return false;
+        if ((co_await connection.read_request()).is_err()) co_return false;
+        auto prepared = connection.prepare_upgrade(UpgradeProtocol::make("websocket"_str).unwrap());
+        if (prepared.is_err()) co_return false;
+        auto result = co_await connection.upgrade(rstd::move(prepared).unwrap());
+        co_return result.is_err() &&
+            result.unwrap_err().kind == ConnectionErrorKind::Timeout&& connection.is_closed();
+    });
+}
 TEST(Connection, ContinueAndChunkedBody) {
     check(expectation);
 }
