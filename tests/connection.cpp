@@ -594,3 +594,58 @@ TEST(Connection, StreamRejectsBodyForHeadAndNoContentStatuses) {
         return streaming_body_rules(rstd::move(server), client, "HEAD"_str, u16(200));
     });
 }
+
+namespace
+{
+auto delayed_body(rstd::net::TcpStream& client) -> rstd::async::coro<bool> {
+    co_await rstd::async::sleep(rstd::time::Duration::from_millis(u64(10)));
+    co_return co_await send(client, "3\r\none\r\n0\r\nX-End: yes\r\n\r\n"_str);
+}
+auto body_source_stream(rstd::net::TcpStream server, rstd::net::TcpStream& client)
+    -> rstd::async::coro<bool> {
+    Connection connection(rstd::move(server));
+    if (! (co_await send(client,
+                         "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n"_str)))
+        co_return false;
+    auto head = co_await connection.read_request();
+    if (head.is_err() || head->is_none()) co_return false;
+    RequestBodySource source(connection);
+    auto sender = rstd::async::AbortOnDropHandle(rstd::async::spawn(delayed_body(client)));
+    auto waited =
+        co_await rstd::async::timeout(rstd::stream::next(source), rstd::time::Duration {});
+    if (waited.is_ok()) co_return false;
+    auto parts =
+        co_await rstd::stream::try_collect<Vec<rstd::bytes::Bytes>>(rstd::stream::by_ref(source));
+    if (parts.is_err() || parts->len() != usize(1) ||
+        parts->operator[](usize()).as_slice() != "one"_str.as_bytes())
+        co_return false;
+    auto trailers = connection.take_trailers();
+    auto end      = co_await source.next();
+    auto joined   = co_await rstd::move(sender);
+    co_return trailers.is_some() && trailers->len() == usize(1) && end.is_ok() && end->is_none() &&
+        joined.is_ok() && *joined;
+}
+auto body_source_error(rstd::net::TcpStream server, rstd::net::TcpStream& client)
+    -> rstd::async::coro<bool> {
+    Connection connection(rstd::move(server));
+    if (! (co_await send(client, "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 3\r\n\r\nx"_str)))
+        co_return false;
+    if (client.shutdown().is_err()) co_return false;
+    auto head = co_await connection.read_request();
+    if (head.is_err() || head->is_none()) co_return false;
+    RequestBodySource source(connection);
+    auto              first = co_await rstd::stream::next(source);
+    if (first.is_none() || first->is_err()) co_return false;
+    auto error = co_await rstd::stream::next(source);
+    if (error.is_none() || error->is_ok() ||
+        error->unwrap_err().decode != Some(DecodeError::Truncated))
+        co_return false;
+    co_return (co_await rstd::stream::next(source)).is_none() && connection.is_closed();
+}
+} // namespace
+TEST(Connection, BodySourceStreamRetainsReadAcrossTimeoutAndPreservesTrailers) {
+    check(body_source_stream);
+}
+TEST(Connection, BodySourceStreamReportsErrorOnceThenEnds) {
+    check(body_source_error);
+}
