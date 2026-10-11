@@ -6,7 +6,7 @@ namespace lihttpto
 using namespace rstd::prelude;
 using namespace rstd::literals;
 
-export enum class EventStreamError { InvalidUtf8, LimitExceeded, Closed };
+export enum class EventStreamError { InvalidUtf8, InvalidField, LimitExceeded, Closed };
 export struct EventStreamLimits {
     usize line_bytes = usize(1024 * 1024);
     usize data_bytes = usize(4 * 1024 * 1024);
@@ -20,6 +20,41 @@ export struct EventStreamProgress {
     usize               consumed;
     Option<ServerEvent> event;
 };
+
+export auto encode_event(const ServerEvent& event, usize limit = usize(4 * 1024 * 1024))
+    -> Result<rstd::bytes::Bytes, EventStreamError> {
+    for (auto field : array<ref<str>, 2> { event.type.as_str(), event.id.as_str() })
+        if (field.contains("\r"_str) || field.contains("\n"_str) || field.contains("\0"_str))
+            return Err(EventStreamError::InvalidField);
+    Vec<u8> output;
+    auto    append = [&](slice<u8> bytes) {
+        if (bytes.len() > limit - output.len()) return false;
+        output.extend_from_slice(bytes);
+        return true;
+    };
+    for (auto field : array<rstd::tuple<ref<str>, ref<str>>, 2> {
+             rstd::tuple { "event: "_str, event.type.as_str() },
+             rstd::tuple { "id: "_str, event.id.as_str() } }) {
+        if (field.template get<1>().is_empty()) continue;
+        if (! append(field.template get<0>().as_bytes()) ||
+            ! append(field.template get<1>().as_bytes()) || ! append("\n"_str.as_bytes()))
+            return Err(EventStreamError::LimitExceeded);
+    }
+    auto  data = event.data.as_str().as_bytes();
+    usize start {};
+    for (usize i {}; i <= data.len(); ++i) {
+        if (i != data.len() && data[i] != u8('\r') && data[i] != u8('\n')) continue;
+        auto line = slice<u8>::from_raw_parts(data.as_raw_ptr() + start.to_primitive(), i - start);
+        if (! append("data: "_str.as_bytes()) || ! append(line) || ! append("\n"_str.as_bytes()))
+            return Err(EventStreamError::LimitExceeded);
+        if (i != data.len() && data[i] == u8('\r') && i + usize(1) < data.len() &&
+            data[i + usize(1)] == u8('\n'))
+            ++i;
+        start = i + usize(1);
+    }
+    if (! append("\n"_str.as_bytes())) return Err(EventStreamError::LimitExceeded);
+    return Ok(rstd::bytes::Bytes::copy_from_slice(output.as_slice()));
+}
 
 // Strict UTF-8 framing only; transport status, reconnection and JSON belong to callers.
 export class EventStreamDecoder {

@@ -173,7 +173,8 @@ public:
         }
         return Ok(UpgradeDisposition::Rejected);
     }
-    auto validate(const ResponseHead& response) const -> Result<empty, UpgradeError> {
+    static auto validate_response(const ResponseHead& response, const UpgradeProtocol& protocol)
+        -> Result<empty, UpgradeError> {
         if (response.status.value() != u16(101)) return Err(UpgradeError::RejectedStatus);
         if (response.version.is_none() || response.version->major() != u8(1) ||
             response.version->minor() != u8(1))
@@ -188,7 +189,7 @@ public:
                 ! parse_connection(header.value.as_slice(), close, persistent, &upgrade))
                 return Err(UpgradeError::InvalidConnection);
             if (header.name.matches("upgrade"_str)) {
-                if (++protocols > 1 || ! protocol_.matches(header.value.as_slice()))
+                if (++protocols > 1 || ! protocol.matches(header.value.as_slice()))
                     return Err(UpgradeError::InvalidProtocol);
             }
         }
@@ -196,7 +197,29 @@ public:
         if (! protocols) return Err(UpgradeError::InvalidProtocol);
         return Ok(empty {});
     }
+    auto validate(const ResponseHead& response) const -> Result<empty, UpgradeError> {
+        return validate_response(response, protocol_);
+    }
 };
+
+auto encode_switching_protocols(const ResponseHead& head, usize limit)
+    -> Result<rstd::bytes::Bytes, UpgradeError> {
+    Vec<u8> bytes;
+    auto    append = [&](ref<str> text) {
+        return append_bytes(bytes, text.as_bytes(), limit);
+    };
+    if (! append("HTTP/1.1 101 "_str)) return Err(UpgradeError::TooLarge);
+    if (head.reason.is_some())
+        if (! append_bytes(bytes, head.reason->as_slice(), limit))
+            return Err(UpgradeError::TooLarge);
+    if (! append("\r\n"_str)) return Err(UpgradeError::TooLarge);
+    for (const auto& header : head.headers)
+        if (! append(header.name.as_str()) || ! append(": "_str) ||
+            ! append_bytes(bytes, header.value.as_slice(), limit) || ! append("\r\n"_str))
+            return Err(UpgradeError::TooLarge);
+    if (! append("\r\n"_str)) return Err(UpgradeError::TooLarge);
+    return Ok(rstd::bytes::Bytes::copy_from_slice(bytes.as_slice()));
+}
 
 class UpgradeOffer {
     Vec<UpgradeProtocol> protocols_;
@@ -243,9 +266,8 @@ public:
         return Ok(UpgradeOffer { rstd::move(protocols) });
     }
 
-    auto response(const UpgradeProtocol& selected,
-                  const Headers&         headers = {},
-                  usize limit = usize(65536)) const -> Result<rstd::bytes::Bytes, UpgradeError> {
+    auto response_head(const UpgradeProtocol& selected, const Headers& headers = {}) const
+        -> Result<ResponseHead, UpgradeError> {
         auto protocol = selected.encode();
         bool offered  = false;
         for (const auto& candidate : protocols_)
@@ -258,19 +280,36 @@ public:
                                                       "transfer-encoding"_str,
                                                       "trailer"_str })
                 if (header.name.matches(reserved)) return Err(UpgradeError::ReservedHeader);
-        Vec<u8> bytes;
-        auto    append = [&](ref<str> text) {
-            return append_bytes(bytes, text.as_bytes(), limit);
-        };
-        if (! append("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: "_str) ||
-            ! append(protocol.as_str()) || ! append("\r\n"_str))
-            return Err(UpgradeError::TooLarge);
-        for (const auto& header : headers)
-            if (! append(header.name.as_str()) || ! append(": "_str) ||
-                ! append_bytes(bytes, header.value.as_slice(), limit) || ! append("\r\n"_str))
-                return Err(UpgradeError::TooLarge);
-        if (! append("\r\n"_str)) return Err(UpgradeError::TooLarge);
-        return Ok(rstd::bytes::Bytes::copy_from_slice(bytes.as_slice()));
+        Headers result;
+        result.add("Connection"_str, "Upgrade"_str).unwrap();
+        result.add("Upgrade"_str, protocol.as_str()).unwrap();
+        for (const auto& header : headers) result.push(header.clone());
+        return Ok(ResponseHead {
+            StatusCode::make(u16(101)).unwrap(),
+            rstd::move(result),
+            Some(MessageVersion(u8(1), u8(1))),
+            Some(HeaderValue::make("Switching Protocols"_str.as_bytes()).unwrap()) });
+    }
+    auto encode_response(const UpgradeProtocol& selected,
+                         const ResponseHead&    head,
+                         usize                  limit = usize(65536)) const
+        -> Result<rstd::bytes::Bytes, UpgradeError> {
+        auto protocol = selected.encode();
+        bool offered  = false;
+        for (const auto& candidate : protocols_)
+            offered = offered || candidate.matches(protocol.as_str().as_bytes());
+        if (! offered) return Err(UpgradeError::InvalidProtocol);
+        auto validated = UpgradeRequest::validate_response(head, selected);
+        if (validated.is_err()) return Err(validated.unwrap_err());
+        if (head.headers.contains("trailer"_str)) return Err(UpgradeError::InvalidFraming);
+        return encode_switching_protocols(head, limit);
+    }
+    auto response(const UpgradeProtocol& selected,
+                  const Headers&         headers = {},
+                  usize limit = usize(65536)) const -> Result<rstd::bytes::Bytes, UpgradeError> {
+        auto head = response_head(selected, headers);
+        if (head.is_err()) return Err(head.unwrap_err());
+        return encode_switching_protocols(*head, limit);
     }
 };
 } // namespace lihttpto

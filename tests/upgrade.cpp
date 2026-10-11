@@ -74,6 +74,36 @@ TEST(Upgrade, ResponseMustSelectOfferedProtocol) {
     EXPECT_TRUE(! protocol.matches("sample/va"_str.as_bytes()));
 }
 
+TEST(Upgrade, ServerHeadIsValidatedAndEncodedAfterMetadataChanges) {
+    RequestHeadDecoder decoder;
+    decoder
+        .feed("GET / HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: sample/vA\r\n\r\n"_str
+                  .as_bytes())
+        .unwrap();
+    auto offer    = UpgradeOffer::parse(decoder.take().unwrap()).unwrap();
+    auto protocol = UpgradeProtocol::make("sample"_str, Some("vA"_str)).unwrap();
+    auto head     = offer.response_head(protocol).unwrap();
+    head.headers.add("X-Final"_str, "yes"_str).unwrap();
+    head.reason = Some(HeaderValue::make("accepted"_str.as_bytes()).unwrap());
+    auto wire   = offer.encode_response(protocol, head).unwrap();
+    EXPECT_TRUE(rstd::str_::from_utf8(wire.as_slice())
+                    .unwrap()
+                    .starts_with("HTTP/1.1 101 accepted\r\n"_str));
+    EXPECT_TRUE(
+        rstd::str_::from_utf8(wire.as_slice()).unwrap().ends_with("X-Final: yes\r\n\r\n"_str));
+    EXPECT_TRUE(offer.encode_response(protocol, head, wire.len()).is_ok());
+    EXPECT_EQ(offer.encode_response(protocol, head, wire.len() - usize(1)).unwrap_err(),
+              UpgradeError::TooLarge);
+    head.headers.set("Upgrade"_str, "sample/other"_str).unwrap();
+    EXPECT_EQ(offer.encode_response(protocol, head).unwrap_err(), UpgradeError::InvalidProtocol);
+    head = offer.response_head(protocol).unwrap();
+    head.headers.add("Content-Length"_str, "0"_str).unwrap();
+    EXPECT_EQ(offer.encode_response(protocol, head).unwrap_err(), UpgradeError::InvalidFraming);
+    head         = offer.response_head(protocol).unwrap();
+    head.version = Some(MessageVersion(u8(1), u8(0)));
+    EXPECT_EQ(offer.encode_response(protocol, head).unwrap_err(), UpgradeError::InvalidVersion);
+}
+
 TEST(Upgrade, HeadConsumptionIsRelativeToCurrentFragment) {
     auto head =
         "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n"_str;

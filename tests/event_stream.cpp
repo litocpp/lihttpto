@@ -84,3 +84,29 @@ TEST(EventStream, LimitsAndInvalidUtf8) {
     EXPECT_EQ(retry.feed("retry: 18446744073709551616\n"_str.as_bytes()).unwrap_err(),
               EventStreamError::LimitExceeded);
 }
+
+TEST(EventStream, EncoderPreservesDataAndRejectsFieldInjectionWithinBudget) {
+    ServerEvent        event { String::make("delta"_str),
+                               String::make("\xe4\xb8\xad\r\none\ntwo\n"_str),
+                               String::make("7"_str) };
+    auto               wire = encode_event(event).unwrap();
+    EventStreamDecoder decoder;
+    Vec<ServerEvent>   events;
+    ASSERT_TRUE(consume(decoder, wire.as_slice(), events));
+    ASSERT_EQ(events.len(), usize(1));
+    EXPECT_EQ(events[usize()].data.as_str(), "\xe4\xb8\xad\none\ntwo\n"_str);
+    EXPECT_EQ(events[usize()].type.as_str(), "delta"_str);
+    EXPECT_EQ(events[usize()].id.as_str(), "7"_str);
+    EXPECT_TRUE(encode_event(event, wire.len()).is_ok());
+    EXPECT_EQ(encode_event(event, wire.len() - usize(1)).unwrap_err(),
+              EventStreamError::LimitExceeded);
+    for (auto invalid :
+         array<ref<str>, 3> { "bad\rfield"_str, "bad\nfield"_str, "bad\0field"_str }) {
+        event.type = String::make(invalid);
+        EXPECT_EQ(encode_event(event).unwrap_err(), EventStreamError::InvalidField);
+        event.type.clear();
+        event.id = String::make(invalid);
+        EXPECT_EQ(encode_event(event).unwrap_err(), EventStreamError::InvalidField);
+        event.id.clear();
+    }
+}
