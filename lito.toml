@@ -12,6 +12,7 @@ name = "lihttpto-tests"
 sources = [
   "tests/main.cpp",
   "tests/header.cpp",
+  "tests/cache.cpp",
   "tests/cgi.cpp",
   "tests/body_transfer.cpp",
   "tests/request_line.cpp",
