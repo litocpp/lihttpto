@@ -48,6 +48,10 @@ public:
                      bool                keep_alive     = true,
                      usize               metadata_limit = usize(65536))
         -> Result<ResponseEncoder, ResponseError> {
+        if (head.version.is_some() &&
+            (head.version->major() != u8(1) ||
+             head.version->minor() != (version == Version::Http11 ? u8(1) : u8())))
+            return Err(ResponseError::InvalidHeader);
         auto        status  = head.status.value();
         auto        omitted = omit_response_body(status, method.as_ref());
         BodyFraming framing;
@@ -58,14 +62,18 @@ public:
                 framing.kind = version == Version::Http11 ? BodyKind::Chunked : BodyKind::UntilEof;
         }
         if (framing.kind == BodyKind::UntilEof) keep_alive = false;
-        auto bytes = encode_response_metadata(status,
-                                              head.headers.as_slice(),
-                                              length,
-                                              method.as_ref(),
-                                              version,
-                                              keep_alive,
-                                              metadata_limit,
-                                              framing.kind == BodyKind::Chunked);
+        auto bytes = encode_response_metadata(
+            status,
+            head.headers.as_slice(),
+            length,
+            method.as_ref(),
+            version,
+            keep_alive,
+            metadata_limit,
+            framing.kind == BodyKind::Chunked,
+            head.reason.is_some()
+                ? Some(ref<HeaderValue>::from_raw_parts(rstd::addressof(*head.reason)))
+                : None<ref<HeaderValue>>());
         if (bytes.is_err()) return Err(bytes.unwrap_err());
         return Ok(ResponseEncoder(rstd::move(bytes).unwrap(), framing, keep_alive, metadata_limit));
     }

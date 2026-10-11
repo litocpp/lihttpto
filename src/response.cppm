@@ -87,14 +87,16 @@ auto validate_response_metadata(u16           status,
 
 namespace lihttpto
 {
-auto encode_response_metadata(u16           status,
-                              slice<Header> headers,
-                              Option<u64>   length,
-                              ref<str>      request_method,
-                              Version       version,
-                              bool          keep_alive = false,
-                              usize         limit      = usize(65536),
-                              bool chunked = false) -> Result<rstd::bytes::Bytes, ResponseError> {
+auto encode_response_metadata(u16                      status,
+                              slice<Header>            headers,
+                              Option<u64>              length,
+                              ref<str>                 request_method,
+                              Version                  version,
+                              bool                     keep_alive = false,
+                              usize                    limit      = usize(65536),
+                              bool                     chunked    = false,
+                              Option<ref<HeaderValue>> reason     = {})
+    -> Result<rstd::bytes::Bytes, ResponseError> {
     rstd_try(validate_response_metadata(status, headers, length, request_method));
     if (chunked && (version != Version::Http11 || length.is_some() ||
                     omit_response_body(status, request_method)))
@@ -104,7 +106,10 @@ auto encode_response_metadata(u16           status,
         return append_bytes(output, value.as_bytes(), limit);
     };
     if (! append(version == Version::Http11 ? "HTTP/1.1 "_str : "HTTP/1.0 "_str) ||
-        ! append_decimal(output, u64(status.to_primitive()), limit) || ! append(" \r\n"_str))
+        ! append_decimal(output, u64(status.to_primitive()), limit) || ! append(" "_str))
+        return Err(ResponseError::TooLarge);
+    if ((reason.is_some() && ! append_bytes(output, (*reason)->as_slice(), limit)) ||
+        ! append("\r\n"_str))
         return Err(ResponseError::TooLarge);
     for (const auto& header : headers) {
         auto name = header.name.as_str();

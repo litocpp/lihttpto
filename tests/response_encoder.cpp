@@ -107,3 +107,29 @@ TEST(ResponseEncoder, MetadataLimitsAndReservedFieldsRemainOwnedByHttp) {
     EXPECT_EQ(ResponseEncoder::make(head, method, Version::Http11).unwrap_err(),
               ResponseError::ReservedHeader);
 }
+TEST(ResponseEncoder, UsesReasonAndRejectsConflictingWireVersion) {
+    ResponseHead head { StatusCode::make(u16(200)).unwrap(),
+                        {},
+                        Some(MessageVersion(u8(1), u8(1))),
+                        Some(HeaderValue::make("all good"_str.as_bytes()).unwrap()) };
+    auto         method = Method::parse("GET"_str).unwrap();
+    auto output = ResponseEncoder::make(head, method, Version::Http11, Some(u64())).unwrap();
+    EXPECT_TRUE(text(output.take_head().unwrap()).starts_with("HTTP/1.1 200 all good\r\n"_str));
+    EXPECT_EQ(ResponseEncoder::make(head, method, Version::Http10).unwrap_err(),
+              ResponseError::InvalidHeader);
+    head.version = Some(MessageVersion(u8(2), u8()));
+    EXPECT_EQ(ResponseEncoder::make(head, method, Version::Http11).unwrap_err(),
+              ResponseError::InvalidHeader);
+    EXPECT_EQ(ResponseEncoder::make(
+                  ResponseHead { StatusCode::make(u16(200)).unwrap(),
+                                 {},
+                                 {},
+                                 Some(HeaderValue::make("long reason"_str.as_bytes()).unwrap()) },
+                  method,
+                  Version::Http11,
+                  {},
+                  true,
+                  usize(16))
+                  .unwrap_err(),
+              ResponseError::TooLarge);
+}
