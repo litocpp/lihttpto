@@ -28,7 +28,9 @@ enum class ResponseError
     InvalidBody,
     TooLarge,
     Io,
-    Timeout
+    Timeout,
+    InvalidState,
+    InvalidTrailer
 };
 struct ResponseWriteError {
     ResponseError   kind;
@@ -55,26 +57,10 @@ auto append_decimal(Vec<u8>& output, u64 value, usize limit) -> bool {
     while (count != usize()) output.push(u8(digits[--count]));
     return true;
 }
-auto omit_response_body(u16 status, ref<str> method) -> bool {
+export auto omit_response_body(u16 status, ref<str> method) -> bool {
     return method == "HEAD"_str || status == u16(204) || status == u16(205) || status == u16(304);
 }
 
-auto write_with_deadline(rstd::net::TcpStream&     stream,
-                         const rstd::bytes::Bytes& bytes,
-                         rstd::time::Instant       started,
-                         rstd::time::Duration      budget)
-    -> rstd::async::coro<Result<empty, ResponseWriteError>> {
-    auto elapsed = started.elapsed();
-    if (elapsed >= budget) co_return Err(ResponseWriteError { ResponseError::Timeout, None() });
-    auto timed =
-        co_await rstd::async::timeout(rstd::async::io::write_all(stream, bytes), budget - elapsed);
-    if (timed.is_err()) co_return Err(ResponseWriteError { ResponseError::Timeout, None() });
-    auto written = rstd::move(timed).unwrap();
-    if (written.is_err())
-        co_return Err(
-            ResponseWriteError { ResponseError::Io, Some(rstd::move(written).unwrap_err()) });
-    co_return Ok(empty {});
-}
 } // namespace lihttpto
 
 namespace lihttpto
@@ -107,9 +93,12 @@ auto encode_response_metadata(u16           status,
                               ref<str>      request_method,
                               Version       version,
                               bool          keep_alive = false,
-                              usize         limit      = usize(65536))
-    -> Result<rstd::bytes::Bytes, ResponseError> {
+                              usize         limit      = usize(65536),
+                              bool chunked = false) -> Result<rstd::bytes::Bytes, ResponseError> {
     rstd_try(validate_response_metadata(status, headers, length, request_method));
+    if (chunked && (version != Version::Http11 || length.is_some() ||
+                    omit_response_body(status, request_method)))
+        return Err(ResponseError::InvalidBody);
     Vec<u8> output;
     auto    append = [&](ref<str> value) {
         return append_bytes(output, value.as_bytes(), limit);
@@ -129,6 +118,8 @@ auto encode_response_metadata(u16           status,
             ! append("\r\n"_str))
             return Err(ResponseError::TooLarge);
     }
+    if (chunked && ! append("Transfer-Encoding: chunked\r\n"_str))
+        return Err(ResponseError::TooLarge);
     if (! append(keep_alive ? "Connection: keep-alive\r\n\r\n"_str
                             : "Connection: close\r\n\r\n"_str))
         return Err(ResponseError::TooLarge);
@@ -171,21 +162,4 @@ auto encode_response_head(const StreamResponseHead& response,
                                     limit);
 }
 
-auto write_response(rstd::net::TcpStream& stream,
-                    const Response&       response,
-                    ref<str>              request_method,
-                    Version               version,
-                    bool                  keep_alive = false,
-                    rstd::time::Duration  budget     = rstd::time::Duration::from_secs(u64(30)))
-    -> rstd::async::coro<Result<empty, ResponseWriteError>> {
-    auto head = encode_response_head(response, request_method, version, keep_alive);
-    if (head.is_err()) co_return Err(ResponseWriteError { head.unwrap_err(), None() });
-    auto bytes   = rstd::move(head).unwrap();
-    auto started = rstd::time::Instant::now();
-    rstd_co_try(co_await write_with_deadline(stream, bytes, started, budget));
-    if (! omit_response_body(response.status, request_method) && ! response.body.is_empty()) {
-        rstd_co_try(co_await write_with_deadline(stream, response.body, started, budget));
-    }
-    co_return Ok(empty {});
-}
 } // namespace lihttpto

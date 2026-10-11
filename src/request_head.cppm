@@ -32,6 +32,23 @@ struct RequestHead {
     bool              keep_alive;
     Option<Authority> authority;
 };
+enum class RequestExpectation
+{
+    None,
+    Continue
+};
+
+auto request_expectation(const RequestHead& request) -> Result<RequestExpectation, DecodeError> {
+    bool seen = false;
+    for (const auto& field : request.headers) {
+        if (! field.name.matches("expect"_str)) continue;
+        if (seen || request.line.version != Version::Http11 ||
+            ! ascii_equal(field.value.as_slice(), "100-continue"_str))
+            return Err(DecodeError::InvalidHeader);
+        seen = true;
+    }
+    return Ok(seen ? RequestExpectation::Continue : RequestExpectation::None);
+}
 } // namespace lihttpto
 
 namespace lihttpto
