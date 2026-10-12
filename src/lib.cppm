@@ -5,6 +5,7 @@ export import :cookie;
 export import :message;
 export import :header;
 export import :cache;
+export import :conditions;
 export import :media_type;
 export import :request_line;
 export import :request_head;

@@ -35,3 +35,33 @@ TEST(HttpCacheFields, NotModifiedPreservesBodyHeaders) {
     merged.push(lihttpto::Header::make("Vary"_str, "*"_bytes).unwrap());
     EXPECT_FALSE(lihttpto::CacheFields::parse(merged).reusable);
 }
+
+TEST(HttpDate, CalendarValidationFormattingAndObsoleteYearWindow) {
+    auto reference = *lihttpto::http_date("Sun, 06 Nov 1994 08:49:37 GMT"_str);
+    for (auto text : array<ref<str>, 3> { "Sun, 06 Nov 1994 08:49:37 GMT"_str,
+                                          "Sunday, 06-Nov-94 08:49:37 GMT"_str,
+                                          "Sun Nov  6 08:49:37 1994"_str })
+        EXPECT_EQ(*lihttpto::http_date(text, reference), reference);
+    EXPECT_EQ(lihttpto::format_http_date(reference)->as_str(), "Sun, 06 Nov 1994 08:49:37 GMT"_str);
+    EXPECT_EQ(lihttpto::format_http_date(i64())->as_str(), "Thu, 01 Jan 1970 00:00:00 GMT"_str);
+    EXPECT_EQ(lihttpto::format_http_date(i64(-1))->as_str(), "Wed, 31 Dec 1969 23:59:59 GMT"_str);
+    EXPECT_EQ(*lihttpto::http_date("Sunday, 06-Nov-44 08:49:37 GMT"_str, reference),
+              *lihttpto::http_date("Sun, 06 Nov 2044 08:49:37 GMT"_str));
+    EXPECT_EQ(*lihttpto::http_date("Sunday, 06-Nov-44 08:49:38 GMT"_str, reference),
+              *lihttpto::http_date("Sun, 06 Nov 1944 08:49:38 GMT"_str));
+    auto later_reference = *lihttpto::http_date("Mon, 28 Feb 2050 00:00:00 GMT"_str);
+    EXPECT_EQ(*lihttpto::http_date("Tuesday, 29-Feb-00 00:00:00 GMT"_str, later_reference),
+              *lihttpto::http_date("Tue, 29 Feb 2000 00:00:00 GMT"_str));
+    EXPECT_TRUE(lihttpto::http_date("Thu, 29 Feb 2024 00:00:00 GMT"_str).is_some());
+    for (auto value : array<ref<str>, 8> { "Thu, 29 Feb 2023 00:00:00 GMT"_str,
+                                           "Sun, 06 Nov 1994 24:49:37 GMT"_str,
+                                           "Sun, 06 Nov 1994 08:60:37 GMT"_str,
+                                           "Sun, 06 Nov 1994 08:49:61 GMT"_str,
+                                           "Sun, 06 Nov 1994 08:49:37 UTC"_str,
+                                           "Sun, 06 nov 1994 08:49:37 GMT"_str,
+                                           "Bad, 06 Nov 1994 08:49:37 GMT"_str,
+                                           "Sun, 06 Nov 1994 08:49:37 GMT extra"_str })
+        EXPECT_TRUE(lihttpto::http_date(value).is_none());
+    EXPECT_EQ(*lihttpto::http_date("Sat, 31 Dec 2016 23:59:60 GMT"_str),
+              *lihttpto::http_date("Sun, 01 Jan 2017 00:00:00 GMT"_str));
+}

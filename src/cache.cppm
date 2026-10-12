@@ -1,9 +1,10 @@
 module;
 #include <rstd/macro.hpp>
-#include <time.h>
 export module lihttpto:cache;
 export import :header;
 export import :message;
+export import :date;
+export import :validator;
 using namespace rstd::prelude;
 using namespace rstd::literals;
 
@@ -18,25 +19,6 @@ auto delta_seconds(ref<str> text) -> Option<i64> {
             rstd::min(i64(2147483648ll), value * i64(10) + i64((byte - u8('0')).to_primitive()));
     }
     return Some(value);
-}
-auto http_date(ref<str> text) -> Option<i64> {
-    if (text.len() > usize(128)) return None();
-    array<char, 129> input {};
-    for (usize i {}; i < text.len(); ++i) input[i] = char(text.as_bytes()[i].to_primitive());
-    for (auto format : array<const char*, 3> {
-             "%a, %d %b %Y %H:%M:%S GMT", "%A, %d-%b-%y %H:%M:%S GMT", "%a %b %e %H:%M:%S %Y" }) {
-        tm   parsed {};
-        auto end = strptime(input.data(), format, &parsed);
-        if (! end || *end || parsed.tm_sec > 59) continue;
-        auto original = parsed;
-        auto result   = timegm(&parsed);
-        if (parsed.tm_year != original.tm_year || parsed.tm_mon != original.tm_mon ||
-            parsed.tm_mday != original.tm_mday || parsed.tm_hour != original.tm_hour ||
-            parsed.tm_min != original.tm_min || parsed.tm_sec != original.tm_sec)
-            continue;
-        return Some(i64(result));
-    }
-    return None();
 }
 auto header_text(const Headers& headers, ref<str> name) -> Option<ref<str>> {
     auto value = headers.get_unique_text(name);
@@ -146,15 +128,8 @@ struct CacheFields {
                 result.age = *parsed;
         }
         if (auto value = header_text(headers, "etag"_str); value.is_some()) {
-            auto tag    = value->trim_ascii();
-            auto opaque = tag.starts_with("W/"_str) ? tag.get(usize(2), tag.len()).unwrap() : tag;
-            bool valid  = opaque.len() >= usize(2) && opaque.as_bytes()[usize()] == u8('"') &&
-                          opaque.as_bytes()[opaque.len() - usize(1)] == u8('"');
-            for (usize i(1); valid && i + usize(1) < opaque.len(); ++i) {
-                auto byte = opaque.as_bytes()[i];
-                valid     = byte == u8(33) || (byte >= u8(35) && byte != u8(127));
-            }
-            if (valid) result.etag = Some(String::make(tag));
+            auto tag = value->trim_ascii();
+            if (EntityTag::parse(tag.as_bytes()).is_ok()) result.etag = Some(String::make(tag));
         }
         for (auto field : headers.get_all("vary"_str)) {
             auto tokens = field->tokens();
@@ -186,26 +161,5 @@ auto merge_not_modified(const Headers& stored, const Headers& update) -> Headers
             result.push(Header::make(name, value->as_slice()).unwrap());
     }
     return result;
-}
-auto entity_tag_matches(ref<str> condition, ref<str> current) -> bool {
-    auto weak = [](ref<str> value) {
-        value = value.trim_ascii();
-        return value.starts_with("W/"_str) ? value.get(usize(2), value.len()).unwrap() : value;
-    };
-    auto  bytes = condition.as_bytes();
-    usize start {};
-    while (start < bytes.len()) {
-        usize end = start;
-        bool  quoted {};
-        while (end < bytes.len()) {
-            if (bytes[end] == u8('"')) quoted = ! quoted;
-            if (! quoted && bytes[end] == u8(',')) break;
-            ++end;
-        }
-        auto value = condition.get(start, end).unwrap().trim_ascii();
-        if (value == "*"_str || weak(value) == weak(current)) return true;
-        start = end + usize(1);
-    }
-    return false;
 }
 } // namespace lihttpto
