@@ -1,2 +1,11 @@
+<release version="0.1.1" date="2026-10-20">
+  <description>
+    <ul>
+      <li>Add cache conditions, entity tags and HTTP date formatting.</li>
+      <li>Add streaming body, response encoding and upgrade metadata.</li>
+      <li>Update rstd to 0.1.9 and CI.</li>
+    </ul>
+  </description>
+</release>
 <release version="0.1.0" date="2026-10-06">
 </release>
