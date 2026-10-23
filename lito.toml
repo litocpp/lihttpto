@@ -15,6 +15,7 @@ sources = [
   "tests/main.cpp",
   "tests/client_codec.cpp",
   "tests/header.cpp",
+  "tests/http2.cpp",
   "tests/cache.cpp",
   "tests/conditions.cpp",
   "tests/cgi.cpp",

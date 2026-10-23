@@ -1,5 +1,6 @@
 export module lihttpto:request_encoder;
 export import :messages;
+export import :hpack;
 export import :body_encoder;
 import :response;
 using namespace rstd::prelude;
@@ -102,6 +103,7 @@ public:
         return Ok(RequestEncoder(
             Bytes::copy_from_slice(bytes.as_slice()), framing, limit, ! close, length));
     }
+    auto length() const -> Option<u64> { return expected_; }
     auto framing() const -> BodyFraming { return framing_; }
     auto keep_alive() const -> bool { return keep_alive_; }
     auto restart() const -> Result<RequestEncoder, ResponseError> {
@@ -131,6 +133,21 @@ public:
         return body_.finish();
     }
 };
+namespace h2
+{
+struct Request {
+    Vec<Field>  fields;
+    Option<u64> length;
+    bool        head {};
+    auto        clone() const -> Request {
+        Request copy;
+        copy.length = length;
+        copy.head   = head;
+        for (const auto& field : fields) copy.fields.push(field.clone());
+        return copy;
+    }
+};
+} // namespace h2
 class PreparedRequest {
     RequestParts   parts_;
     RequestEncoder encoder_;
@@ -145,6 +162,45 @@ public:
         auto encoder = RequestEncoder::make(parts, length, limit, trailers);
         if (encoder.is_err()) return Err(rstd::move(encoder).unwrap_err());
         return Ok(PreparedRequest(rstd::move(parts), rstd::move(encoder).unwrap()));
+    }
+    auto http2_request() const -> Result<h2::Request, ResponseError> {
+        h2::Request result;
+        result.length = encoder_.length();
+        result.head   = parts_.method.as_ref() == "HEAD"_str;
+        auto add      = [&](ref<str> name, ref<str> value) {
+            result.fields.push(
+                { String::make(name), Bytes::copy_from_slice(value.as_bytes()), false });
+        };
+        auto origin = parts_.url.http_origin().unwrap();
+        add(":method"_str, parts_.method.as_ref());
+        add(":scheme"_str, origin.scheme.as_str());
+        auto authority = origin.authority();
+        add(":authority"_str, authority.as_str());
+        auto target = parts_.url.request_target();
+        add(":path"_str, target.as_str());
+        for (const auto& field : parts_.headers) {
+            if (field.name.matches("host"_str) || field.name.matches("content-length"_str))
+                continue;
+            if (field.name.matches("connection"_str) || field.name.matches("keep-alive"_str) ||
+                field.name.matches("proxy-connection"_str) ||
+                field.name.matches("transfer-encoding"_str) || field.name.matches("upgrade"_str))
+                return Err(ResponseError::ReservedHeader);
+            auto value = field.value.as_slice();
+            if (! value.is_empty() && (ows(value[usize()]) || ows(value[value.len() - usize(1)])))
+                return Err(ResponseError::InvalidHeader);
+            if (field.name.matches("te"_str) && ! ascii_equal(value, "trailers"_str))
+                return Err(ResponseError::InvalidHeader);
+            auto name = String::make(field.name.as_str());
+            name.as_mut_str().make_ascii_lowercase();
+            bool sensitive = field.name.matches("authorization"_str) ||
+                             field.name.matches("cookie"_str) ||
+                             field.name.matches("proxy-authorization"_str);
+            result.fields.push(
+                { rstd::move(name), Bytes::copy_from_slice(field.value.as_slice()), sensitive });
+        }
+        if (result.length.is_some())
+            add("content-length"_str, rstd::format("{}", *result.length).as_str());
+        return Ok(rstd::move(result));
     }
     auto parts() const -> const RequestParts& { return parts_; }
     auto encoder() const -> RequestEncoder { return encoder_.restart().unwrap(); }

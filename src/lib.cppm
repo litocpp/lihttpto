@@ -21,3 +21,5 @@ export import :messages;
 export import :request_encoder;
 export import :response_head;
 export import :client_fields;
+
+export import :http2;
