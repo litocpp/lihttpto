@@ -20,6 +20,17 @@ auto delta_seconds(ref<str> text) -> Option<i64> {
     }
     return Some(value);
 }
+auto response_age(const Headers& headers) -> Result<Option<u64>, HeaderError> {
+    for (auto field : headers.get_all("age"_str)) {
+        auto  text = rstd_try(field->to_str());
+        usize end;
+        while (end < text.len() && text.as_bytes()[end] != u8(',')) ++end;
+        auto parsed = delta_seconds(text.get(usize(), end).unwrap().trim_ascii());
+        if (parsed.is_none()) return Err(HeaderError::InvalidValue());
+        return Ok(Some(u64(parsed->to_primitive())));
+    }
+    return Ok<Option<u64>>(None());
+}
 auto header_text(const Headers& headers, ref<str> name) -> Option<ref<str>> {
     auto value = headers.get_unique_text(name);
     return value.is_ok() ? *value : None<ref<str>>();
@@ -120,13 +131,11 @@ struct CacheFields {
             else
                 result.last_modified = parsed;
         }
-        if (auto value = header_text(headers, "age"_str); value.is_some()) {
-            auto parsed = delta_seconds(value->trim_ascii());
-            if (parsed.is_none())
-                result.reusable = false;
-            else
-                result.age = *parsed;
-        }
+        auto age = response_age(headers);
+        if (age.is_err())
+            result.reusable = false;
+        else if (age->is_some())
+            result.age = i64((**age).to_primitive());
         if (auto value = header_text(headers, "etag"_str); value.is_some()) {
             auto tag = value->trim_ascii();
             if (EntityTag::parse(tag.as_bytes()).is_ok()) result.etag = Some(String::make(tag));

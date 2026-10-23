@@ -75,3 +75,19 @@ TEST(Cache, PolicyKeepsAgeAcrossValidation) {
     EXPECT_TRUE(policy.fresh(i64(105), {}));
     EXPECT_FALSE(policy.fresh(i64(160), {}));
 }
+
+TEST(HttpAge, OrderedListAndSaturation) {
+    lihttpto::Headers headers;
+    EXPECT_TRUE(lihttpto::response_age(headers)->is_none());
+    headers.add("Age"_str, " 3, 900"_str).unwrap();
+    headers.add("age"_str, "invalid"_str).unwrap();
+    EXPECT_EQ(**lihttpto::response_age(headers), u64(3));
+    EXPECT_EQ(lihttpto::CacheFields::parse(headers).age, i64(3));
+    for (auto text : array<ref<str>, 5> { "-1"_str, ""_str, ", 2"_str, "bad, 2"_str, "1 2"_str }) {
+        headers.set("Age"_str, text).unwrap();
+        EXPECT_TRUE(lihttpto::response_age(headers).is_err());
+        EXPECT_FALSE(lihttpto::CacheFields::parse(headers).reusable);
+    }
+    headers.set("Age"_str, "99999999999999999999999999999999"_str).unwrap();
+    EXPECT_EQ(**lihttpto::response_age(headers), u64(2147483648ull));
+}
