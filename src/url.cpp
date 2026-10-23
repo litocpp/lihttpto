@@ -766,3 +766,29 @@ auto Url::origin() const -> Result<UrlOrigin, UrlError> {
 }
 
 } // namespace lihttpto
+
+namespace lihttpto
+{
+auto Url::numeric_address() const -> Option<rstd::net::SocketAddr> {
+    using namespace rstd::net;
+    auto port = effective_port();
+    if (record_.host.is_none() || port.is_none()) return None();
+    const auto& host = *record_.host;
+    if (host.kind == Host::Kind::Ipv4) {
+        auto v = host.ipv4.to_primitive();
+        return Some(
+            SocketAddr::ipv4(Ipv4Addr::make(u8(v >> 24), u8(v >> 16), u8(v >> 8), u8(v)), *port));
+    }
+    if (host.kind == Host::Kind::Ipv6)
+        return Some(SocketAddr::ipv6(Ipv6Addr::make(host.ipv6[0],
+                                                    host.ipv6[1],
+                                                    host.ipv6[2],
+                                                    host.ipv6[3],
+                                                    host.ipv6[4],
+                                                    host.ipv6[5],
+                                                    host.ipv6[6],
+                                                    host.ipv6[7]),
+                                     *port));
+    return None();
+}
+} // namespace lihttpto

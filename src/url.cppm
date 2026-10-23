@@ -116,6 +116,7 @@ public:
 
     [[nodiscard]]
     auto effective_port() const -> Option<u16>;
+    auto numeric_address() const -> Option<rstd::net::SocketAddr>;
 
     [[nodiscard]]
     auto path() const noexcept -> ref<str>;

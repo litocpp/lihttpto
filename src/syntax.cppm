@@ -121,3 +121,36 @@ public:
     }
 };
 } // namespace lihttpto
+
+export namespace rstd
+{
+template<>
+struct Impl<fmt::Display, lihttpto::DecodeError> : ImplBase<lihttpto::DecodeError> {
+    auto fmt(fmt::Formatter& f) const -> bool {
+        using lihttpto::DecodeError;
+        switch (this->self()) {
+        case DecodeError::InvalidLine: return f.write_str("invalid HTTP line"_str);
+        case DecodeError::UnsupportedVersion: return f.write_str("unsupported HTTP version"_str);
+        case DecodeError::TooLarge: return f.write_str("HTTP metadata limit exceeded"_str);
+        case DecodeError::Truncated: return f.write_str("truncated HTTP message"_str);
+        case DecodeError::InvalidState: return f.write_str("invalid HTTP decoder state"_str);
+        case DecodeError::InvalidHeader: return f.write_str("invalid HTTP header"_str);
+        case DecodeError::InvalidHost: return f.write_str("invalid HTTP Host"_str);
+        case DecodeError::InvalidTarget: return f.write_str("invalid HTTP request target"_str);
+        case DecodeError::UnsupportedTarget:
+            return f.write_str("unsupported HTTP target or upgrade"_str);
+        case DecodeError::InvalidContentLength:
+            return f.write_str("invalid HTTP Content-Length"_str);
+        case DecodeError::AmbiguousFraming: return f.write_str("ambiguous HTTP framing"_str);
+        case DecodeError::UnsupportedTransferEncoding:
+            return f.write_str("unsupported HTTP Transfer-Encoding"_str);
+        }
+        return f.write_str("unknown HTTP decoding error"_str);
+    }
+};
+template<>
+struct Impl<fmt::Debug, lihttpto::DecodeError> : Impl<fmt::Display, lihttpto::DecodeError> {};
+template<>
+struct Impl<error::Error, lihttpto::DecodeError>
+    : DefaultInImpl<error::Error, lihttpto::DecodeError> {};
+} // namespace rstd

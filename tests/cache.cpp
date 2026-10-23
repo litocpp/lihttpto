@@ -65,3 +65,13 @@ TEST(HttpDate, CalendarValidationFormattingAndObsoleteYearWindow) {
     EXPECT_EQ(*lihttpto::http_date("Sat, 31 Dec 2016 23:59:60 GMT"_str),
               *lihttpto::http_date("Sun, 01 Jan 2017 00:00:00 GMT"_str));
 }
+
+TEST(Cache, PolicyKeepsAgeAcrossValidation) {
+    lihttpto::Headers headers;
+    headers.add("Cache-Control"_str, "max-age=60"_str).unwrap();
+    headers.add("Age"_str, "10"_str).unwrap();
+    auto policy = lihttpto::CachePolicy::make(headers, i64(100), i64(102));
+    EXPECT_EQ(policy.age(i64(105)), i64(15));
+    EXPECT_TRUE(policy.fresh(i64(105), {}));
+    EXPECT_FALSE(policy.fresh(i64(160), {}));
+}

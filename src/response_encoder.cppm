@@ -1,5 +1,5 @@
 export module lihttpto:response_encoder;
-export import :body_frame;
+export import :body_encoder;
 export import :response;
 export import :message;
 
@@ -11,30 +11,17 @@ export namespace lihttpto
 {
 // Owns framing state only; transport, deadlines and stream errors belong to the driver.
 class ResponseEncoder {
-    enum class State
-    {
-        Head,
-        Body,
-        Trailers,
-        Finished,
-        Failed
-    };
     Bytes       head_;
     BodyFraming framing_;
-    State       state_ { State::Head };
-    bool        keep_alive_ {};
-    u64         sent_ {};
-    usize       metadata_limit_;
-
+    bool        keep_alive_;
+    bool        started_ {};
+    bool        failed_ {};
+    BodyEncoder body_;
     ResponseEncoder(Bytes head, BodyFraming framing, bool keep_alive, usize limit)
         : head_(rstd::move(head)),
           framing_(framing),
           keep_alive_(keep_alive),
-          metadata_limit_(limit) {}
-    auto fail(ResponseError error) -> Result<Bytes, ResponseError> {
-        state_ = State::Failed;
-        return Err(error);
-    }
+          body_(framing, limit) {}
 
 public:
     ResponseEncoder(const ResponseEncoder&)                        = delete;
@@ -80,56 +67,26 @@ public:
     auto framing() const -> BodyFraming { return framing_; }
     auto keep_alive() const -> bool { return keep_alive_; }
     auto take_head() -> Result<Bytes, ResponseError> {
-        if (state_ != State::Head) return fail(ResponseError::InvalidState);
-        state_ = State::Body;
+        if (started_ || failed_) {
+            failed_ = true;
+            return Err(ResponseError::InvalidState);
+        }
+        started_ = true;
         return Ok(rstd::exchange(head_, Bytes {}));
     }
     auto encode(BodyFrame frame) -> Result<Bytes, ResponseError> {
-        if (state_ != State::Body) return fail(ResponseError::InvalidState);
-        if (frame.is_Trailers()) {
-            if (framing_.kind != BodyKind::Chunked ||
-                validate_trailers(frame.as_Trailers().headers).is_err())
-                return fail(ResponseError::InvalidTrailer);
-            Vec<u8> output;
-            if (! append_bytes(output, "0\r\n"_str.as_bytes(), metadata_limit_))
-                return fail(ResponseError::TooLarge);
-            for (const auto& field : frame.as_Trailers().headers) {
-                if (! append_bytes(output, field.name.as_str().as_bytes(), metadata_limit_) ||
-                    ! append_bytes(output, ": "_str.as_bytes(), metadata_limit_) ||
-                    ! append_bytes(output, field.value.as_slice(), metadata_limit_) ||
-                    ! append_bytes(output, "\r\n"_str.as_bytes(), metadata_limit_))
-                    return fail(ResponseError::TooLarge);
-            }
-            if (! append_bytes(output, "\r\n"_str.as_bytes(), metadata_limit_))
-                return fail(ResponseError::TooLarge);
-            state_ = State::Trailers;
-            return Ok(Bytes::copy_from_slice(output.as_slice()));
+        if (! started_ || failed_) {
+            failed_ = true;
+            return Err(ResponseError::InvalidState);
         }
-        auto bytes  = rstd::move(frame.as_Data().bytes);
-        auto length = u64(bytes.len().to_primitive());
-        if (length == u64()) return Ok(Bytes {});
-        if (framing_.kind == BodyKind::None || length > u64::MAX - sent_ ||
-            (framing_.kind == BodyKind::FixedLength && length > framing_.length - sent_))
-            return fail(ResponseError::InvalidBody);
-        sent_ += length;
-        if (framing_.kind != BodyKind::Chunked) return Ok(rstd::move(bytes));
-        auto prefix = rstd::format("{:x}\r\n", length);
-        if (bytes.len() > usize::MAX - prefix.len() - usize(2))
-            return fail(ResponseError::TooLarge);
-        auto output = Vec<u8>::with_capacity(prefix.len() + bytes.len() + usize(2));
-        (void)append_bytes(output, prefix.as_str().as_bytes(), usize::MAX);
-        (void)append_bytes(output, bytes.as_slice(), usize::MAX);
-        (void)append_bytes(output, "\r\n"_str.as_bytes(), usize::MAX);
-        return Ok(Bytes::copy_from_slice(output.as_slice()));
+        return body_.encode(rstd::move(frame));
     }
     auto finish() -> Result<Bytes, ResponseError> {
-        if (state_ != State::Body && state_ != State::Trailers)
-            return fail(ResponseError::InvalidState);
-        if (framing_.kind == BodyKind::FixedLength && sent_ != framing_.length)
-            return fail(ResponseError::InvalidBody);
-        bool terminate = framing_.kind == BodyKind::Chunked && state_ == State::Body;
-        state_         = State::Finished;
-        return Ok(terminate ? Bytes::copy_from_slice("0\r\n\r\n"_str.as_bytes()) : Bytes {});
+        if (! started_ || failed_) {
+            failed_ = true;
+            return Err(ResponseError::InvalidState);
+        }
+        return body_.finish();
     }
 };
 } // namespace lihttpto

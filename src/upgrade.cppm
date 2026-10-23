@@ -2,6 +2,7 @@ export module lihttpto:upgrade;
 export import :message;
 export import :request_body;
 export import :request_head;
+export import :response_head;
 import :response;
 
 using namespace rstd::prelude;
@@ -26,39 +27,6 @@ enum class UpgradeDisposition
     Switched,
     Rejected
 };
-
-auto response_body_framing(const ResponseHead& response, const Method& method)
-    -> Result<BodyFraming, DecodeError> {
-    Option<u64> length;
-    bool        chunked = false;
-    auto        status  = response.status.value();
-    for (const auto& header : response.headers) {
-        if (header.name.matches("content-length"_str)) {
-            if (length.is_some()) return Err(DecodeError::AmbiguousFraming);
-            auto parsed = parse_length(header.value.as_slice());
-            if (parsed.is_err()) return Err(parsed.unwrap_err());
-            length = Some(*parsed);
-        } else if (header.name.matches("transfer-encoding"_str)) {
-            if (chunked || ! ascii_equal(header.value.as_slice(), "chunked"_str))
-                return Err(DecodeError::UnsupportedTransferEncoding);
-            chunked = true;
-        }
-    }
-    if (chunked && length.is_some()) return Err(DecodeError::AmbiguousFraming);
-    if (status < u16(200) || status == u16(204)) {
-        if (length.is_some() || chunked) return Err(DecodeError::AmbiguousFraming);
-        return Ok(BodyFraming {});
-    }
-    if (chunked && (response.version.is_none() || response.version->major() != u8(1) ||
-                    response.version->minor() != u8(1)))
-        return Err(DecodeError::UnsupportedTransferEncoding);
-    if (method.as_ref() == "HEAD"_str || status == u16(304)) return Ok(BodyFraming {});
-    if (method.as_ref() == "CONNECT"_str && status < u16(300))
-        return Err(DecodeError::UnsupportedTarget);
-    if (chunked) return Ok(BodyFraming { BodyKind::Chunked });
-    if (length.is_some()) return Ok(BodyFraming { BodyKind::FixedLength, *length });
-    return Ok(BodyFraming { BodyKind::UntilEof });
-}
 
 class UpgradeProtocol {
     HeaderName         name_;

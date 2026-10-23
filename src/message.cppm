@@ -132,6 +132,9 @@ export struct ResponseHead {
     Headers                headers;
     Option<MessageVersion> version;
     Option<HeaderValue>    reason;
+    auto                   clone() const -> ResponseHead {
+        return { status, headers.clone(), version, reason.clone() };
+    }
 };
 
 export class MessageHead : public DefaultInClass<MessageHead, Clone> {

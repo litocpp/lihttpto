@@ -17,3 +17,7 @@ export import :query;
 export import :body;
 export import :event_stream;
 export import :upgrade;
+export import :messages;
+export import :request_encoder;
+export import :response_head;
+export import :client_fields;

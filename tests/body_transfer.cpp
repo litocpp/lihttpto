@@ -57,3 +57,16 @@ TEST(BodyTransfer, PreservesSourceAndSinkErrorsWithoutReadingAhead) {
     EXPECT_EQ(read_error.as_Source().error, i32(11));
     EXPECT_EQ(source.reads, usize());
 }
+
+TEST(BodyCollect, BoundedCollectionPreservesSourceError) {
+    auto runtime = rstd::async::RuntimeBuilder::current_thread().enable_all().build().unwrap();
+    auto bytes   = runtime.block_on(collect_body(TransferSource {}, usize(9))).unwrap();
+    EXPECT_EQ(rstd::str_::from_utf8(bytes.as_slice()).unwrap(), "abcabcabc"_str);
+    EXPECT_TRUE(
+        runtime.block_on(collect_body(TransferSource {}, usize(8))).unwrap_err().is_TooLarge());
+    TransferSource failed;
+    failed.fail = true;
+    EXPECT_EQ(
+        runtime.block_on(collect_body(rstd::move(failed), usize(9))).unwrap_err().as_Source().error,
+        i32(11));
+}

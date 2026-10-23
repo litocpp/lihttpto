@@ -27,6 +27,24 @@ template<class ReadError, class WriteError>
 class BodyTransferError {
     RSTD_ENUM(BodyTransferError, (Source, (ReadError error;)), (Sink, (WriteError error;)))
 };
+template<class SourceError>
+class BodyCollectError {
+    RSTD_ENUM(BodyCollectError, (Source, (SourceError error;)), (TooLarge))
+};
+template<BodySource Source>
+auto collect_body(Source source, usize limit)
+    -> rstd::async::coro<Result<Bytes, BodyCollectError<typename Source::Error>>> {
+    using Error = BodyCollectError<typename Source::Error>;
+    Vec<u8> bytes;
+    for (;;) {
+        auto part = co_await source.next();
+        if (part.is_err()) co_return Err(Error::Source(rstd::move(part).unwrap_err()));
+        if (part->is_none()) co_return Ok(Bytes::copy_from_slice(bytes.as_slice()));
+        auto data = part->take().unwrap();
+        if (data.len() > limit - bytes.len()) co_return Err(Error::TooLarge());
+        bytes.extend_from_slice(data.as_slice());
+    }
+}
 // EOF does not finalize the sink; its owner controls response or resource completion.
 template<BodySource Source, BodySink Sink>
 auto transfer_body(Source& source, Sink& sink) -> rstd::async::coro<

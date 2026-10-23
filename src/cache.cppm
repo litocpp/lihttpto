@@ -143,11 +143,52 @@ struct CacheFields {
                 result.vary.push(rstd::move(token));
             }
         }
-        if (headers.contains("set-cookie"_str) || result.control.no_store || result.control.invalid)
-            result.reusable = false;
+        if (result.control.no_store || result.control.invalid) result.reusable = false;
         return result;
     }
 };
+struct CachePolicy {
+    lihttpto::CacheFields fields;
+    i64                   request_time {}, response_time {}, date_anchor {};
+    static auto
+    make(const lihttpto::Headers& headers, i64 requested, i64 received, Option<i64> anchor = None())
+        -> CachePolicy {
+        return { lihttpto::CacheFields::parse(headers),
+                 requested,
+                 received,
+                 anchor.is_some() ? *anchor : received };
+    }
+    auto age(i64 now) const -> i64 {
+        auto apparent = rstd::cmp::max(
+            i64(), response_time - (fields.date.is_some() ? *fields.date : date_anchor));
+        auto initial = rstd::cmp::max(
+            apparent, fields.age + rstd::cmp::max(i64(), response_time - request_time));
+        return initial + rstd::cmp::max(i64(), now - response_time);
+    }
+    auto lifetime() const -> i64 {
+        if (fields.control.max_age.is_some()) return *fields.control.max_age;
+        return fields.expires.is_some()
+                   ? rstd::cmp::max(i64(),
+                                    *fields.expires -
+                                        (fields.date.is_some() ? *fields.date : date_anchor))
+                   : i64();
+    }
+    auto fresh(i64 now, const lihttpto::CacheControl& request) const -> bool {
+        if (! fields.reusable || fields.control.no_cache || request.no_cache || request.invalid)
+            return false;
+        auto limit = lifetime();
+        if (request.max_age.is_some()) limit = rstd::min(limit, *request.max_age);
+        return age(now) + (request.min_fresh.is_some() ? *request.min_fresh : i64()) < limit;
+    }
+    template<class Equal>
+    auto matches_request(Equal equal) const -> bool {
+        if (! fields.reusable || ! equal("authorization"_str)) return false;
+        for (const auto& name : fields.vary)
+            if (! equal(name.as_str())) return false;
+        return true;
+    }
+};
+
 auto merge_not_modified(const Headers& stored, const Headers& update) -> Headers {
     auto result = stored.clone();
     for (const auto& field : update) {
