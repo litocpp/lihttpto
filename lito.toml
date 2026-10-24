@@ -26,6 +26,7 @@ sources = [
   "tests/response_encoder.cpp",
   "tests/request_target.cpp",
   "tests/http_values.cpp",
+  "tests/cookie_store.cpp",
   "tests/event_stream.cpp",
   "tests/upgrade.cpp",
   "tests/url_baseline.cpp",

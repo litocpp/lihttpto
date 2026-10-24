@@ -51,6 +51,10 @@ public:
         return version_.is_some() ? rstd::format("{}/{}", name_.as_str(), version_->as_str())
                                   : String::make(name_.as_str());
     }
+    auto clone() const -> UpgradeProtocol {
+        return UpgradeProtocol(name_.clone(),
+                               version_.is_some() ? Some(version_->clone()) : None<HeaderName>());
+    }
     auto matches(slice<u8> bytes) const -> bool {
         usize begin {}, end = bytes.len();
         while (begin < end && ows(bytes[begin])) ++begin;
@@ -68,6 +72,18 @@ public:
     }
 };
 
+auto validate_upgrade_headers(const Headers& headers) -> Result<empty, UpgradeError> {
+    for (const auto& header : headers)
+        for (auto reserved : array<ref<str>, 7> { "host"_str,
+                                                  "connection"_str,
+                                                  "upgrade"_str,
+                                                  "content-length"_str,
+                                                  "transfer-encoding"_str,
+                                                  "expect"_str,
+                                                  "trailer"_str })
+            if (header.name.matches(reserved)) return Err(UpgradeError::ReservedHeader);
+    return Ok(empty {});
+}
 class UpgradeRequest {
     rstd::bytes::Bytes bytes_;
     UpgradeProtocol    protocol_;
@@ -89,16 +105,8 @@ public:
         if (parsed_target.is_err() || parsed_target->form != TargetForm::Origin ||
             authority.is_err())
             return Err(UpgradeError::InvalidRequest);
-        for (const auto& header : headers) {
-            for (auto reserved : array<ref<str>, 7> { "host"_str,
-                                                      "connection"_str,
-                                                      "upgrade"_str,
-                                                      "content-length"_str,
-                                                      "transfer-encoding"_str,
-                                                      "expect"_str,
-                                                      "trailer"_str })
-                if (header.name.matches(reserved)) return Err(UpgradeError::ReservedHeader);
-        }
+        auto valid = validate_upgrade_headers(headers);
+        if (valid.is_err()) return Err(valid.unwrap_err());
         Vec<u8> bytes;
         auto    append = [&](ref<str> text) {
             return append_bytes(bytes, text.as_bytes(), limit);
@@ -122,6 +130,9 @@ public:
                                    rstd::move(method) });
     }
     auto bytes() const -> const rstd::bytes::Bytes& { return bytes_; }
+    auto clone() const -> UpgradeRequest {
+        return UpgradeRequest(bytes_.clone(), protocol_.clone(), method_.clone());
+    }
     auto body_framing(const ResponseHead& response) const -> Result<BodyFraming, DecodeError> {
         return response_body_framing(response, method_);
     }

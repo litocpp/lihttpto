@@ -7,16 +7,13 @@ export namespace lihttpto
 {
 auto response_body_framing(const ResponseHead& response, const Method& method)
     -> Result<BodyFraming, DecodeError> {
-    Option<u64> length;
-    bool        chunked = false;
-    auto        status  = response.status.value();
+    auto parsed_length = content_length(response.headers);
+    if (parsed_length.is_err()) return Err(parsed_length.unwrap_err());
+    auto length  = *parsed_length;
+    bool chunked = false;
+    auto status  = response.status.value();
     for (const auto& header : response.headers) {
-        if (header.name.matches("content-length"_str)) {
-            if (length.is_some()) return Err(DecodeError::AmbiguousFraming);
-            auto parsed = parse_length(header.value.as_slice());
-            if (parsed.is_err()) return Err(parsed.unwrap_err());
-            length = Some(*parsed);
-        } else if (header.name.matches("transfer-encoding"_str)) {
+        if (header.name.matches("transfer-encoding"_str)) {
             if (chunked || ! ascii_equal(header.value.as_slice(), "chunked"_str))
                 return Err(DecodeError::UnsupportedTransferEncoding);
             chunked = true;

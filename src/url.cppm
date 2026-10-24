@@ -110,6 +110,7 @@ public:
 
     [[nodiscard]]
     auto host() const noexcept -> Option<ref<str>>;
+    auto host_name() const noexcept -> Option<ref<str>>;
 
     [[nodiscard]]
     auto port() const noexcept -> Option<ref<str>>;

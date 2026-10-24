@@ -138,7 +138,8 @@ auto valid_future(slice<u8> bytes) -> bool {
     });
     return value.is_some() && cursor.is_eof();
 }
-auto parse_authority(slice<u8> bytes, bool require_port = false) -> Result<Authority, DecodeError> {
+export auto parse_authority(slice<u8> bytes, bool require_port = false)
+    -> Result<Authority, DecodeError> {
     rstd::parse::TextCursor cursor { rstd::parse::Input<u8>(bytes) };
     Authority               result;
     slice<u8>               host;

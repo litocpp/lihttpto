@@ -27,6 +27,11 @@ class BodyEncoder {
 public:
     explicit BodyEncoder(BodyFraming framing, usize limit = usize(65536), Option<u64> expected = {})
         : framing_(framing), metadata_limit_(limit), expected_(expected) {}
+    auto remaining() const -> Option<u64> {
+        if (expected_.is_some()) return Some(*expected_ - sent_);
+        if (framing_.kind == BodyKind::FixedLength) return Some(framing_.length - sent_);
+        return None();
+    }
     auto encode(BodyFrame frame) -> Result<Bytes, ResponseError> {
         if (state_ != State::Body) return fail(ResponseError::InvalidState);
         if (frame.is_Trailers()) {

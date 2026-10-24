@@ -5,6 +5,59 @@ using namespace rstd::literals;
 using namespace lihttpto;
 using rstd::bytes::Bytes;
 
+TEST(ProxyCodec, AbsoluteTargetAndConnectAuthorityUseParsedUrl) {
+    RequestParts parts { Url::parse_http("http://EXAMPLE.test:8080/a?q=%2F#ignored"_str).unwrap(),
+                         Method::parse("GET"_str).unwrap(),
+                         {} };
+    auto         encoder =
+        RequestEncoder::make(parts, Some(u64()), usize(65536), nullptr, TargetForm::Absolute)
+            .unwrap();
+    EXPECT_TRUE(rstd::str_::from_utf8(encoder.take_head().unwrap().as_slice())
+                    .unwrap()
+                    .starts_with("GET http://example.test:8080/a?q=%2F HTTP/1.1\r\n"_str));
+    auto url = Url::parse_http("https://[::1]/a"_str).unwrap();
+    EXPECT_EQ(url.host_name().unwrap(), "::1"_str);
+    EXPECT_EQ(rstd::str_::from_utf8(connect_request(url).unwrap().as_slice()).unwrap(),
+              "CONNECT [::1]:443 HTTP/1.1\r\nHost: [::1]:443\r\n\r\n"_str);
+    EXPECT_TRUE(connect_request(url, usize(4)).is_err());
+}
+
+TEST(ProxyCodec, ConnectDecoderPreservesBytesAndRejectsUnsafeFailureFraming) {
+    auto head =
+        "HTTP/1.1 200 Connected\r\nContent-Length: 9\r\nTransfer-Encoding: chunked\r\n\r\n"_bytes;
+    for (usize split; split < head.len(); ++split) {
+        TunnelHeadDecoder decoder;
+        EXPECT_TRUE(
+            decoder.feed(slice<u8>::from_raw_parts(head.as_raw_ptr(), split)).unwrap().is_none());
+        auto tail =
+            slice<u8>::from_raw_parts(head.as_raw_ptr() + split.to_primitive(), head.len() - split);
+        auto result = decoder.feed(tail).unwrap().unwrap();
+        EXPECT_EQ(result.disposition, TunnelDisposition::Established);
+        EXPECT_EQ(result.input_consumed, tail.len());
+        EXPECT_TRUE(decoder.feed("extra"_bytes).is_err());
+    }
+    TunnelHeadDecoder decoder;
+    EXPECT_EQ(decoder.feed("HTTP/1.1 100 Continue\r\n\r\n"_bytes).unwrap().unwrap().disposition,
+              TunnelDisposition::Informational);
+    auto established = decoder.feed("HTTP/1.1 200 Connected\r\n\r\nready"_bytes).unwrap().unwrap();
+    EXPECT_EQ(established.input_consumed, usize(26));
+    TunnelHeadDecoder rejected;
+    auto failure = rejected.feed("HTTP/1.1 407 Auth\r\nContent-Length: 6\r\n\r\ndenied"_bytes)
+                       .unwrap()
+                       .unwrap();
+    EXPECT_EQ(failure.disposition, TunnelDisposition::Rejected);
+    EXPECT_EQ(failure.framing.length, u64(6));
+    TunnelHeadDecoder bad;
+    EXPECT_TRUE(
+        bad.feed(
+               "HTTP/1.1 407 Auth\r\nContent-Length: 1\r\nTransfer-Encoding: chunked\r\n\r\n"_bytes)
+            .is_err());
+    TunnelHeadDecoder limited(usize(55));
+    EXPECT_TRUE(limited.feed("HTTP/1.1 100 Continue\r\n\r\n"_bytes).is_ok());
+    EXPECT_TRUE(limited.feed("HTTP/1.1 100 Continue\r\n\r\n"_bytes).is_ok());
+    EXPECT_TRUE(limited.feed("HTTP/1.1 200 Connected\r\n\r\n"_bytes).is_err());
+}
+
 TEST(RequestEncoder, OriginHostFramingAndExactLength) {
     RequestParts parts { Url::parse_http("http://example.test:8080/a?q=1#ignored"_str).unwrap(),
                          Method::parse("POST"_str).unwrap(),

@@ -709,6 +709,13 @@ auto HttpOrigin::authority() const -> String {
 auto HttpOrigin::serialize() const -> String {
     return rstd::format("{}://{}", scheme, authority());
 }
+auto Url::host_name() const noexcept -> Option<ref<str>> {
+    auto value = host();
+    if (value.is_none()) return None();
+    if (record_.host->kind == Host::Kind::Ipv6)
+        return value->get(usize(1), value->len() - usize(1));
+    return value;
+}
 auto Url::http_origin() const -> Option<HttpOrigin> {
     if (record_.host.is_none() || (record_.scheme != "http"_str && record_.scheme != "https"_str))
         return None();

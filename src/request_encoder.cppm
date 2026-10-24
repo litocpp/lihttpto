@@ -31,16 +31,22 @@ class RequestEncoder {
 
 public:
     static auto make(const RequestParts& parts,
-                     Option<u64>         length = Some(u64()),
-                     usize               limit  = usize(65536),
-                     const Headers* trailers = nullptr) -> Result<RequestEncoder, ResponseError> {
+                     Option<u64>         length      = Some(u64()),
+                     usize               limit       = usize(65536),
+                     const Headers*      trailers    = nullptr,
+                     TargetForm          target_form = TargetForm::Origin)
+        -> Result<RequestEncoder, ResponseError> {
         if (trailers && validate_trailers(*trailers).is_err())
             return Err(ResponseError::InvalidTrailer);
         auto origin = parts.url.http_origin();
         if (origin.is_none() || parts.url.userinfo().is_some() ||
             parts.method.as_ref() == "CONNECT"_str)
             return Err(ResponseError::InvalidHeader);
-        auto target = parts.url.request_target();
+        if (target_form != TargetForm::Origin && target_form != TargetForm::Absolute)
+            return Err(ResponseError::InvalidHeader);
+        auto target = target_form == TargetForm::Absolute
+                          ? rstd::format("{}{}", origin->serialize(), parts.url.request_target())
+                          : parts.url.request_target();
         if (parse_request_target(parts.method.as_ref(), target.as_str().as_bytes()).is_err())
             return Err(ResponseError::InvalidHeader);
         auto        authority = origin->authority();
@@ -156,10 +162,12 @@ class PreparedRequest {
 
 public:
     static auto make(RequestParts   parts,
-                     Option<u64>    length   = Some(u64()),
-                     usize          limit    = usize(65536),
-                     const Headers* trailers = nullptr) -> Result<PreparedRequest, ResponseError> {
-        auto encoder = RequestEncoder::make(parts, length, limit, trailers);
+                     Option<u64>    length      = Some(u64()),
+                     usize          limit       = usize(65536),
+                     const Headers* trailers    = nullptr,
+                     TargetForm     target_form = TargetForm::Origin)
+        -> Result<PreparedRequest, ResponseError> {
+        auto encoder = RequestEncoder::make(parts, length, limit, trailers, target_form);
         if (encoder.is_err()) return Err(rstd::move(encoder).unwrap_err());
         return Ok(PreparedRequest(rstd::move(parts), rstd::move(encoder).unwrap()));
     }

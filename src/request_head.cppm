@@ -32,6 +32,8 @@ struct RequestHead {
     bool              keep_alive;
     Option<Authority> authority;
 };
+auto content_length(const Headers& headers) -> Result<Option<u64>, DecodeError>;
+
 enum class RequestExpectation
 {
     None,
@@ -74,6 +76,18 @@ auto parse_length(slice<u8> bytes) -> Result<u64, DecodeError> {
         length = length * u64(10) + digit;
     }
     return Ok(length);
+}
+
+auto content_length(const Headers& headers) -> Result<Option<u64>, DecodeError> {
+    Option<u64> result;
+    for (const auto& field : headers) {
+        if (! field.name.matches("content-length"_str)) continue;
+        if (result.is_some()) return Err(DecodeError::AmbiguousFraming);
+        auto length = parse_length(field.value.as_slice());
+        if (length.is_err()) return Err(length.unwrap_err());
+        result = Some(*length);
+    }
+    return Ok(result);
 }
 
 auto parse_connection(slice<u8> bytes, bool& close, bool& persistent, bool* upgrade = nullptr)
