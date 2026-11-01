@@ -232,3 +232,28 @@ TEST(Http2, LocalShutdownLeavesGoawayAsTheLastFrame) {
     c.shutdown();
     EXPECT_TRUE(c.take_output().is_empty());
 }
+TEST(Http2, TypedOutputAttributesEachDataPayloadAndExcludesControlFrames) {
+    auto connection = h2::ClientConnection::make({}).unwrap();
+    connection.feed(h2::frame(u8(4), u8(), u32(), {})).unwrap();
+    auto first  = connection.open(h2_request()).unwrap();
+    auto second = connection.open(h2_request()).unwrap();
+    connection.send(first, Bytes::copy_from_slice("abc"_bytes)).unwrap();
+    connection.send(second, Bytes::copy_from_slice("defgh"_bytes), true).unwrap();
+    connection.send(first, Bytes::copy_from_slice("ij"_bytes), true).unwrap();
+    usize count;
+    for (auto& output : connection.take_output()) {
+        if (output.payload_length == usize()) {
+            EXPECT_EQ(output.payload_offset, usize());
+            continue;
+        }
+        EXPECT_EQ(output.payload_offset, usize(9));
+        EXPECT_EQ(output.bytes.len(), output.payload_offset + output.payload_length);
+        EXPECT_EQ(output.stream, count == usize(1) ? second : first);
+        EXPECT_EQ(output.payload_length,
+                  count == usize(1)  ? usize(5)
+                  : count == usize() ? usize(3)
+                                     : usize(2));
+        ++count;
+    }
+    EXPECT_EQ(count, usize(3));
+}

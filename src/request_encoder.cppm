@@ -124,12 +124,17 @@ public:
         started_ = true;
         return Ok(rstd::exchange(head_, Bytes {}));
     }
-    auto encode(BodyFrame frame) -> Result<Bytes, ResponseError> {
+    auto encode_piece(BodyFrame frame) -> Result<EncodedBody, ResponseError> {
         if (! started_ || failed_) {
             failed_ = true;
             return Err(ResponseError::InvalidState);
         }
-        return body_.encode(rstd::move(frame));
+        return body_.encode_piece(rstd::move(frame));
+    }
+    auto encode(BodyFrame frame) -> Result<Bytes, ResponseError> {
+        auto piece = encode_piece(rstd::move(frame));
+        if (piece.is_err()) return Err(rstd::move(piece).unwrap_err());
+        return Ok(rstd::move(piece->bytes));
     }
     auto finish() -> Result<Bytes, ResponseError> {
         if (! started_ || failed_) {

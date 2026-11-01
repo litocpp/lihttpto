@@ -96,6 +96,7 @@ struct Stream {
 export struct Outbound {
     Bytes bytes;
     u32   stream;
+    usize payload_offset {}, payload_length {};
 };
 export class ClientConnection {
     Limits        limits_;
@@ -117,7 +118,11 @@ export class ClientConnection {
     }
     void emit(unsigned type, unsigned flags, unsigned id, Bytes bytes = {}) {
         if (local_shutdown_) return;
-        output_.push({ frame(u8(type), u8(flags), u32(id), rstd::move(bytes)), u32(id) });
+        auto size = type == 0 ? bytes.len() : usize();
+        output_.push({ frame(u8(type), u8(flags), u32(id), rstd::move(bytes)),
+                       u32(id),
+                       type == 0 ? usize(9) : usize(),
+                       size });
     }
     void update(unsigned id, unsigned n) {
         if (! n) return;

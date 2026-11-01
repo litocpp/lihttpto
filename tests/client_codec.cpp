@@ -76,6 +76,35 @@ TEST(RequestEncoder, OriginHostFramingAndExactLength) {
     parts.headers.add("Transfer-Encoding"_str, "chunked"_str).unwrap();
     EXPECT_TRUE(RequestEncoder::make(parts, Some(u64(3))).is_err());
 }
+TEST(RequestEncoder, TypedBodyPiecesIdentifyOnlyDataForFixedAndChunkedWrites) {
+    RequestParts parts { Url::parse_http("http://example.test/upload"_str).unwrap(),
+                         Method::parse("POST"_str).unwrap(),
+                         {} };
+    for (bool chunked : array<bool, 2> { false, true }) {
+        auto encoder = RequestEncoder::make(parts, chunked ? None<u64>() : Some(u64(3))).unwrap();
+        encoder.take_head().unwrap();
+        auto data =
+            encoder.encode_piece(BodyFrame::Data(Bytes::copy_from_slice("abc"_bytes))).unwrap();
+        EXPECT_EQ(data.payload_length, usize(3));
+        EXPECT_EQ(data.payload_offset, chunked ? usize(3) : usize());
+        EXPECT_EQ(
+            rstd::str_::from_utf8(
+                data.bytes.slice(data.payload_offset, data.payload_offset + data.payload_length)
+                    .as_slice())
+                .unwrap(),
+            "abc"_str);
+        EXPECT_EQ(data.bytes.len(), chunked ? usize(8) : usize(3));
+        if (chunked) {
+            Headers trailers;
+            trailers.add("X-End"_str, "abc"_str).unwrap();
+            auto last = encoder.encode_piece(BodyFrame::Trailers(rstd::move(trailers))).unwrap();
+            EXPECT_FALSE(last.bytes.is_empty());
+            EXPECT_EQ(last.payload_length, usize());
+        }
+        EXPECT_TRUE(encoder.finish().unwrap().is_empty());
+        EXPECT_TRUE(encoder.encode_piece(BodyFrame::Data(Bytes {})).is_err());
+    }
+}
 TEST(RequestEncoder, ChunkedTrailersAndRejectsUnsafeTargets) {
     RequestParts parts { Url::parse_http("https://[::1]/"_str).unwrap(),
                          Method::parse("POST"_str).unwrap(),
