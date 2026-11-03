@@ -168,3 +168,32 @@ auto encode_response_head(const StreamResponseHead& response,
 }
 
 } // namespace lihttpto
+
+export namespace rstd
+{
+template<>
+struct Impl<fmt::Display, lihttpto::ResponseError> : ImplBase<lihttpto::ResponseError> {
+    auto fmt(fmt::Formatter& f) const -> bool {
+        switch (this->self()) {
+        case lihttpto::ResponseError::InvalidStatus: return f.write_str("invalid HTTP status"_str);
+        case lihttpto::ResponseError::InvalidHeader: return f.write_str("invalid HTTP field"_str);
+        case lihttpto::ResponseError::ReservedHeader: return f.write_str("reserved HTTP field"_str);
+        case lihttpto::ResponseError::InvalidBody: return f.write_str("invalid HTTP body"_str);
+        case lihttpto::ResponseError::TooLarge:
+            return f.write_str("HTTP encoding exceeds limit"_str);
+        case lihttpto::ResponseError::Io: return f.write_str("HTTP transport failed"_str);
+        case lihttpto::ResponseError::Timeout: return f.write_str("HTTP encoding timed out"_str);
+        case lihttpto::ResponseError::InvalidState:
+            return f.write_str("invalid HTTP encoder state"_str);
+        case lihttpto::ResponseError::InvalidTrailer:
+            return f.write_str("invalid HTTP trailer"_str);
+        }
+        return false;
+    }
+};
+template<>
+struct Impl<fmt::Debug, lihttpto::ResponseError> : Impl<fmt::Display, lihttpto::ResponseError> {};
+template<>
+struct Impl<error::Error, lihttpto::ResponseError>
+    : DefaultInImpl<error::Error, lihttpto::ResponseError> {};
+} // namespace rstd

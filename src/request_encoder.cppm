@@ -150,14 +150,49 @@ struct Request {
     Vec<Field>  fields;
     Option<u64> length;
     bool        head {};
+    bool        tunnel {};
     auto        clone() const -> Request {
         Request copy;
         copy.length = length;
         copy.head   = head;
+        copy.tunnel = tunnel;
         for (const auto& field : fields) copy.fields.push(field.clone());
         return copy;
     }
 };
+auto connect_request(ref<str> authority, slice<Field> fields = {}, usize limit = usize(65536))
+    -> rstd::Result<Request, ResponseError> {
+    if (authority.len() > limit) return Err(ResponseError::TooLarge);
+    auto target = parse_authority(authority.as_bytes(), true);
+    if (target.is_err() || target->port == Some(u16())) return Err(ResponseError::InvalidHeader);
+    Request result;
+    result.tunnel = true;
+    result.fields.push({ ":method"_Str, Bytes::copy_from_slice("CONNECT"_str.as_bytes()), false });
+    result.fields.push({ ":authority"_Str, Bytes::copy_from_slice(authority.as_bytes()), false });
+    usize size = authority.len() + usize(32);
+    for (const auto& field : fields) {
+        auto name = field.name.as_str();
+        if (name.is_empty() || name.as_bytes()[usize()] == u8(':') || name == "host"_str ||
+            name == "content-length"_str || name == "connection"_str ||
+            name == "proxy-connection"_str || name == "keep-alive"_str ||
+            name == "transfer-encoding"_str || name == "upgrade"_str || name == "te"_str)
+            return Err(ResponseError::ReservedHeader);
+        for (auto byte : name.as_bytes())
+            if (byte >= u8('A') && byte <= u8('Z')) return Err(ResponseError::InvalidHeader);
+        auto checked = Header::make(name, field.value.as_slice());
+        if (checked.is_err()) return Err(ResponseError::InvalidHeader);
+        auto value = field.value.as_slice();
+        if (! value.is_empty() && (ows(value[usize()]) || ows(value[value.len() - usize(1)])))
+            return Err(ResponseError::InvalidHeader);
+        if (field.name.len() > limit || field.value.len() > limit || size > limit ||
+            field.name.len() + field.value.len() > limit - size)
+            return Err(ResponseError::TooLarge);
+        size += field.name.len() + field.value.len();
+        result.fields.push(field.clone());
+    }
+    if (size > limit) return Err(ResponseError::TooLarge);
+    return Ok(rstd::move(result));
+}
 } // namespace h2
 class PreparedRequest {
     RequestParts   parts_;

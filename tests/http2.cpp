@@ -257,3 +257,56 @@ TEST(Http2, TypedOutputAttributesEachDataPayloadAndExcludesControlFrames) {
     }
     EXPECT_EQ(count, usize(3));
 }
+TEST(Http2, ConnectAuthorityPreservesSensitiveFieldsAndRejectsHttpMessageFields) {
+    Vec<h2::Field> fields;
+    fields.push({ "proxy-authorization"_Str, Bytes::copy_from_slice("Basic secret"_bytes), true });
+    fields.push({ "padding"_Str, Bytes::copy_from_slice("random"_bytes), true });
+    auto request = h2::connect_request("[2001:db8::1]:443"_str, fields.as_slice()).unwrap();
+    EXPECT_TRUE(request.tunnel);
+    EXPECT_EQ(request.fields.len(), usize(4));
+    EXPECT_EQ(request.fields[usize()].name.as_str(), ":method"_str);
+    EXPECT_EQ(request.fields[usize(1)].name.as_str(), ":authority"_str);
+    EXPECT_TRUE(request.fields[usize(2)].sensitive);
+    h2::HpackDecoder decoder;
+    auto decoded = decoder.decode(h2::encode_fields(request.fields.as_slice()).unwrap()).unwrap();
+    EXPECT_TRUE(decoded[usize(2)].sensitive);
+    EXPECT_TRUE(decoded[usize(3)].sensitive);
+    for (auto authority : array<ref<str>, 5> { "example.com"_str,
+                                               "example.com:0"_str,
+                                               "example.com:abc"_str,
+                                               "user@example.com:443"_str,
+                                               "example.com:443/path"_str })
+        EXPECT_TRUE(h2::connect_request(authority).is_err());
+    fields.push({ "content-length"_Str, Bytes::copy_from_slice("0"_bytes), false });
+    EXPECT_TRUE(h2::connect_request("example.com:443"_str, fields.as_slice()).is_err());
+}
+TEST(Http2, ConnectIgnoresSuccessfulContentLengthAndPreservesBothHalfCloses) {
+    h2::ClientConnection connection;
+    connection.feed(h2::frame(u8(4), u8(), u32(), {})).unwrap();
+    auto id = connection.open(h2::connect_request("example.com:443"_str).unwrap()).unwrap();
+    connection.feed(h2_headers(id, "880f0d0130"_str)).unwrap();
+    connection.feed(h2::frame(u8(), u8(1), id, Bytes::copy_from_slice("abc"_bytes))).unwrap();
+    auto events = connection.take_events();
+    EXPECT_EQ(events.len(), usize(3));
+    EXPECT_TRUE(events[usize(1)].is_Data());
+    EXPECT_TRUE(events[usize(2)].is_End());
+    EXPECT_TRUE(connection.send(id, Bytes::copy_from_slice("still writable"_bytes)).is_ok());
+    EXPECT_TRUE(connection.send(id, {}, true).is_ok());
+    connection.consume(id, usize(3));
+    connection.forget(id);
+    EXPECT_EQ(connection.capacity(), usize(128));
+}
+TEST(Http2, ConnectNonSuccessStillUsesNormalResponseFraming) {
+    h2::ClientConnection connection;
+    connection.feed(h2::frame(u8(4), u8(), u32(), {})).unwrap();
+    auto id = connection.open(h2::connect_request("example.com:443"_str).unwrap()).unwrap();
+    Vec<h2::Field> fields;
+    fields.push({ ":status"_Str, Bytes::copy_from_slice("407"_bytes), false });
+    fields.push({ "content-length"_Str, Bytes::copy_from_slice("0"_bytes), false });
+    connection.feed(h2::frame(u8(1), u8(4), id, h2::encode_fields(fields.as_slice()).unwrap()))
+        .unwrap();
+    connection.feed(h2::frame(u8(), u8(1), id, Bytes::copy_from_slice("bad"_bytes))).unwrap();
+    bool reset = false;
+    for (const auto& event : connection.take_events()) reset = reset || event.is_Reset();
+    EXPECT_TRUE(reset);
+}

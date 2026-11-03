@@ -90,7 +90,7 @@ struct Stream {
     unsigned    outstanding {};
     Option<u64> expected;
     u64         received {};
-    bool        head {}, final {}, local_end {}, remote_end {}, reset {};
+    bool        head {}, final {}, local_end {}, remote_end {}, reset {}, tunnel {};
     usize       informational {};
 };
 export struct Outbound {
@@ -204,7 +204,9 @@ export class ClientConnection {
             for (auto b : value)
                 if (b == u8() || b == u8('\r') || b == u8('\n')) invalid = true;
             if (name == "te"_str) invalid = true;
-            if (name == "content-length"_str) {
+            if (name == "content-length"_str &&
+                ! (s->tunnel && status.is_some() && status->value() >= u16(200) &&
+                   status->value() < u16(300))) {
                 auto parsed = parse_length(value);
                 if (s->final || length.is_some() || parsed.is_err())
                     invalid = true;
@@ -237,8 +239,9 @@ export class ClientConnection {
         }
         if (! info) {
             s->final    = true;
-            s->expected = length;
-            s->head     = s->head || code == 204 || code == 304;
+            bool tunnel = s->tunnel && code >= 200 && code < 300;
+            s->expected = tunnel ? None<u64>() : length;
+            s->head     = ! tunnel && (s->head || code == 204 || code == 304);
         }
         events_.push(Event::Head(
             u32(id),
@@ -471,7 +474,12 @@ public:
                                0,
                                None(),
                                u64(),
-                               request.head });
+                               request.head,
+                               false,
+                               false,
+                               false,
+                               false,
+                               request.tunnel });
         send_headers(id, rstd::move(block), false);
         return Ok(u32(id));
     }
