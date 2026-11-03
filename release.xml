@@ -1,3 +1,13 @@
+<release version="0.1.2" date="2026-11-04">
+  <description>
+    <ul>
+      <li>Add PreparedRequest, RequestEncoder and EncodedBody.</li>
+      <li>Add HTTP/2 ClientConnection, HpackDecoder and CONNECT stream framing.</li>
+      <li>Add CookieStorage, TunnelHeadDecoder and response age calculation.</li>
+      <li>Update rstd to 0.1.11.</li>
+    </ul>
+  </description>
+</release>
 <release version="0.1.1" date="2026-10-20">
   <description>
     <ul>
