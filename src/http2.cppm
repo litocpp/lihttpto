@@ -97,6 +97,7 @@ export struct Outbound {
     Bytes bytes;
     u32   stream;
     usize payload_offset {}, payload_length {};
+    bool  headers_start {}, headers_end {}, stream_end {};
 };
 export class ClientConnection {
     Limits        limits_;
@@ -122,7 +123,10 @@ export class ClientConnection {
         output_.push({ frame(u8(type), u8(flags), u32(id), rstd::move(bytes)),
                        u32(id),
                        type == 0 ? usize(9) : usize(),
-                       size });
+                       size,
+                       type == 1,
+                       (type == 1 || type == 9) && (flags & 4) != 0,
+                       type == 0 && (flags & 1) != 0 });
     }
     void update(unsigned id, unsigned n) {
         if (! n) return;
@@ -495,7 +499,8 @@ private:
                  (block.is_empty() ? 4 : 0) | (first && end_stream ? 1 : 0),
                  id,
                  rstd::move(part));
-            first = false;
+            output_[output_.len() - usize(1)].stream_end = end_stream && block.is_empty();
+            first                                        = false;
         } while (! block.is_empty());
     }
 

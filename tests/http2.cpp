@@ -257,6 +257,63 @@ TEST(Http2, TypedOutputAttributesEachDataPayloadAndExcludesControlFrames) {
     }
     EXPECT_EQ(count, usize(3));
 }
+TEST(Http2, TypedOutputMarksHeaderBlocksAndEmptyEndStream) {
+    auto connection = h2::ClientConnection::make({}).unwrap();
+    connection.take_output();
+    connection.feed(h2::frame(u8(4), u8(), u32(), {})).unwrap();
+    connection.take_output();
+    Vec<u8> value;
+    value.resize(usize(20 * 1024), u8('x'));
+    auto request = h2_request();
+    request.fields.push({ "x-large"_Str, Bytes::copy_from_slice(value.as_slice()), true });
+    auto first  = connection.open(request).unwrap();
+    auto output = connection.take_output();
+    ASSERT_EQ(output.len(), usize(2));
+    h2::FrameDecoder decoder;
+    for (usize i; i < output.len(); ++i) {
+        auto frames = decoder.feed(output[i].bytes.clone()).unwrap();
+        ASSERT_EQ(frames.len(), usize(1));
+        EXPECT_EQ(frames[usize()].type, i == usize() ? u8(1) : u8(9));
+        EXPECT_EQ(output[i].stream, first);
+        EXPECT_EQ(output[i].headers_start, i == usize());
+        EXPECT_EQ(output[i].headers_end, i == usize(1));
+        EXPECT_FALSE(output[i].stream_end);
+        EXPECT_EQ(output[i].payload_offset, usize());
+        EXPECT_EQ(output[i].payload_length, usize());
+    }
+    lihttpto::Headers trailers;
+    trailers.add("x-trailer"_str, lihttpto::HeaderValue::make(value.as_slice()).unwrap()).unwrap();
+    connection.trailers(first, trailers).unwrap();
+    output = connection.take_output();
+    ASSERT_EQ(output.len(), usize(2));
+    for (usize i; i < output.len(); ++i) {
+        auto frames = decoder.feed(output[i].bytes.clone()).unwrap();
+        ASSERT_EQ(frames.len(), usize(1));
+        EXPECT_EQ(frames[usize()].type, i == usize() ? u8(1) : u8(9));
+        EXPECT_EQ(output[i].stream, first);
+        EXPECT_EQ(output[i].headers_start, i == usize());
+        EXPECT_EQ(output[i].headers_end, i == usize(1));
+        EXPECT_EQ(output[i].stream_end, i == usize(1));
+        EXPECT_EQ(output[i].payload_offset, usize());
+        EXPECT_EQ(output[i].payload_length, usize());
+    }
+    auto second = connection.open(h2_request()).unwrap();
+    connection.take_output();
+    connection.send(second, {}, true).unwrap();
+    output = connection.take_output();
+    ASSERT_EQ(output.len(), usize(1));
+    auto& empty_end = output[usize()];
+    auto  frames    = decoder.feed(empty_end.bytes.clone()).unwrap();
+    ASSERT_EQ(frames.len(), usize(1));
+    EXPECT_EQ(frames[usize()].type, u8());
+    EXPECT_EQ(empty_end.stream, second);
+    EXPECT_FALSE(empty_end.headers_start);
+    EXPECT_FALSE(empty_end.headers_end);
+    EXPECT_TRUE(empty_end.stream_end);
+    EXPECT_EQ(empty_end.payload_offset, usize(9));
+    EXPECT_EQ(empty_end.payload_length, usize());
+    EXPECT_EQ(empty_end.bytes.len(), usize(9));
+}
 TEST(Http2, ConnectAuthorityPreservesSensitiveFieldsAndRejectsHttpMessageFields) {
     Vec<h2::Field> fields;
     fields.push({ "proxy-authorization"_Str, Bytes::copy_from_slice("Basic secret"_bytes), true });
