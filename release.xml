@@ -1,3 +1,11 @@
+<release version="0.1.3" date="2026-11-08">
+  <description>
+    <ul>
+      <li>Add HTTP/2 outbound header and stream boundaries.</li>
+      <li>Update rstd to 0.1.12.</li>
+    </ul>
+  </description>
+</release>
 <release version="0.1.2" date="2026-11-04">
   <description>
     <ul>
