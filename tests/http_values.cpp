@@ -112,6 +112,110 @@ TEST(HttpValues, QueryParamsPreserveOrderedRepeatedValues) {
     EXPECT_EQ(rstd::format("{}", raw_trait.unwrap()).as_str(), "value=a%2Bb"_str);
 }
 
+TEST(HttpValues, FormComponentLossyDecoding) {
+    struct Case {
+        ref<str> input;
+        ref<str> expected;
+    };
+    const Case cases[] {
+        { "a+b%2B%252B"_str, "a b+%2B"_str },
+        { "%"_str, "%"_str },
+        { "%2"_str, "%2"_str },
+        { "%GG"_str, "%GG"_str },
+        { "%2G"_str, "%2G"_str },
+        { "%G2"_str, "%G2"_str },
+        { "%2%41"_str, "%2A"_str },
+        { "%+A"_str, "% A"_str },
+        { "%00"_str, "\0"_str },
+        { "%FF"_str, "\xef\xbf\xbd"_str },
+        { "%E2%82"_str, "\xef\xbf\xbd"_str },
+        { "%E2%82A"_str,
+          "\xef\xbf\xbd"
+          "A"_str },
+        { "%F0%9F%92"_str, "\xef\xbf\xbd"_str },
+        { "%C0%AF"_str, "\xef\xbf\xbd\xef\xbf\xbd"_str },
+        { "%ED%A0%80"_str, "\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd"_str },
+    };
+    for (const auto& test : cases)
+        EXPECT_EQ(lihttpto::decode_form_component_lossy(test.input).as_str(), test.expected);
+}
+
+TEST(HttpValues, QueryParamsFormLossyPreservesPairs) {
+    using lihttpto::QueryParams;
+    auto query = QueryParams::parse_form_lossy(
+        "&&repeat=one+two&repeat=%2B&flag&=value&=&equals=a=b&encoded%26=%3D&percent=%252B&&"_str);
+    struct Pair {
+        ref<str> name;
+        ref<str> value;
+    };
+    const Pair expected[] {
+        { "repeat"_str, "one two"_str }, { "repeat"_str, "+"_str },    { "flag"_str, ""_str },
+        { ""_str, "value"_str },         { ""_str, ""_str },           { "equals"_str, "a=b"_str },
+        { "encoded&"_str, "="_str },     { "percent"_str, "%2B"_str },
+    };
+    ASSERT_EQ(query.len(), usize(8));
+    auto pairs = query.iter();
+    for (const auto& pair : expected) {
+        auto actual = pairs.next();
+        ASSERT_TRUE(actual.is_some());
+        EXPECT_EQ((*actual)->name(), pair.name);
+        EXPECT_EQ((*actual)->value(), pair.value);
+    }
+    EXPECT_TRUE(pairs.next().is_none());
+    EXPECT_EQ(query.encode_form().as_str(),
+              "repeat=one+two&repeat=%2B&flag=&=value&=&equals=a%3Db"
+              "&encoded%26=%3D&percent=%252B"_str);
+    EXPECT_TRUE(QueryParams::parse_form_lossy(""_str).is_empty());
+    EXPECT_TRUE(QueryParams::parse_form_lossy("&&"_str).is_empty());
+    auto invalid = QueryParams::parse_form_lossy("bad=%GG&%FF=%E2%82"_str);
+    EXPECT_EQ(invalid.encode_form().as_str(), "bad=%25GG&%EF%BF%BD=%EF%BF%BD"_str);
+}
+
+TEST(HttpValues, QueryParamsStrictDecodingKeepsErrorsAndEmptyFields) {
+    using lihttpto::QueryParams;
+    struct Case {
+        ref<str> input;
+        usize    offset;
+        bool     utf8;
+    };
+    const Case cases[] {
+        { "ok=1&bad=%"_str, usize(9), false },      { "ok=1&bad=%2"_str, usize(9), false },
+        { "ok=1&bad=%GG"_str, usize(10), false },   { "ok=1&bad=%2G"_str, usize(11), false },
+        { "ok=1&%GG=value"_str, usize(6), false },  { "ok=1&bad=%FF"_str, usize(9), true },
+        { "ok=1&bad=%41%FF"_str, usize(12), true }, { "ok=1&%FF=value"_str, usize(5), true },
+    };
+    for (auto form : array<bool, 2> { false, true }) {
+        for (const auto& test : cases) {
+            auto parsed =
+                form ? QueryParams::parse_form(test.input) : QueryParams::parse_query(test.input);
+            ASSERT_TRUE(parsed.is_err());
+            auto error = rstd::move(parsed).unwrap_err();
+            EXPECT_EQ(error.kind().is_InvalidUtf8(), test.utf8);
+            EXPECT_EQ(error.kind().is_InvalidPercentEncoding(), ! test.utf8);
+            EXPECT_EQ(error.offset(), test.offset);
+        }
+        auto empty = form ? QueryParams::parse_form("&&flag&&x=1&"_str)
+                          : QueryParams::parse_query("&&flag&&x=1&"_str);
+        ASSERT_TRUE(empty.is_ok());
+        EXPECT_EQ(empty->len(), usize(5));
+        EXPECT_EQ(empty->encode_query().as_str(), "=&=&flag=&=&x=1"_str);
+    }
+    EXPECT_TRUE(lihttpto::decode_form_component("%GG"_str).is_err());
+    EXPECT_TRUE(lihttpto::decode_form_component("%FF"_str).is_err());
+    EXPECT_TRUE(lihttpto::decode_form_query("x=%GG"_str.as_bytes()).is_err());
+}
+
+TEST(HttpValues, FormEncoderUsesFormSafeCharacters) {
+    using namespace lihttpto;
+    auto text = "AZaz09-._*~ +/%\xc3\xa9"_str;
+    EXPECT_EQ(encode_form_component(text).as_str(), "AZaz09-._*%7E+%2B%2F%25%C3%A9"_str);
+    EXPECT_EQ(encode_component(text).as_str(), "AZaz09-._%2A~%20%2B%2F%25%C3%A9"_str);
+    QueryParams query;
+    query.add("*~"_str, text);
+    EXPECT_EQ(query.encode_form().as_str(), "*%7E=AZaz09-._*%7E+%2B%2F%25%C3%A9"_str);
+    EXPECT_EQ(query.encode_query().as_str(), "%2A~=AZaz09-._%2A~%20%2B%2F%25%C3%A9"_str);
+}
+
 TEST(HttpValues, CookieValuesParseAttributesAndPreserveOrder) {
     using namespace lihttpto;
 

@@ -22,41 +22,45 @@ auto hex_value(u8 value) noexcept -> Option<u8> {
     return None();
 }
 
-auto decode(ref<str> input, bool plus_as_space) -> rstd::Result<String, QueryError> {
+auto decode(ref<str> input, bool plus_as_space, bool lossy = false)
+    -> rstd::Result<String, QueryError> {
     auto bytes          = Vec<u8>::with_capacity(input.size());
-    auto source_offsets = Vec<usize>::with_capacity(input.size());
+    auto source_offsets = Vec<usize>::with_capacity(lossy ? usize() : input.size());
     auto cursor         = parser::Cursor { input };
 
     while (! cursor.at_end()) {
         auto source_offset = cursor.offset();
         auto value         = *cursor.peek();
+        cursor.advance(usize(1));
         if (value.to_primitive() == '%') {
-            cursor.advance(usize(1));
-            auto high_offset = cursor.offset();
-            auto high        = cursor.peek();
-            if (high.is_none()) {
-                return Err(QueryError { QueryErrorKind::InvalidPercentEncoding(), source_offset });
+            if (cursor.remaining() < usize(2)) {
+                if (! lossy)
+                    return Err(
+                        QueryError { QueryErrorKind::InvalidPercentEncoding(), source_offset });
+            } else {
+                auto high_offset = cursor.offset();
+                auto high_value  = hex_value(input[high_offset]);
+                auto low_value   = hex_value(input[high_offset + usize(1)]);
+                if (high_value.is_some() && low_value.is_some()) {
+                    value = u8((high_value->to_primitive() << 4) | low_value->to_primitive());
+                    cursor.advance(usize(2));
+                } else if (! lossy) {
+                    auto error_offset = high_value.is_none() ? high_offset : high_offset + usize(1);
+                    return Err(
+                        QueryError { QueryErrorKind::InvalidPercentEncoding(), error_offset });
+                }
             }
-            cursor.advance(usize(1));
-            auto low = cursor.peek();
-            if (low.is_none()) {
-                return Err(QueryError { QueryErrorKind::InvalidPercentEncoding(), source_offset });
-            }
-            cursor.advance(usize(1));
-
-            auto high_value = hex_value(*high);
-            auto low_value  = hex_value(*low);
-            if (high_value.is_none() || low_value.is_none()) {
-                auto error_offset = high_value.is_none() ? high_offset : high_offset + usize(1);
-                return Err(QueryError { QueryErrorKind::InvalidPercentEncoding(), error_offset });
-            }
-            value = u8((high_value->to_primitive() << 4) | low_value->to_primitive());
-        } else {
-            cursor.advance(usize(1));
-            if (plus_as_space && value.to_primitive() == '+') value = u8(' ');
-        }
+        } else if (plus_as_space && value.to_primitive() == '+')
+            value = u8(' ');
         bytes.push(rstd::move(value));
-        source_offsets.push(rstd::move(source_offset));
+        if (! lossy) source_offsets.push(rstd::move(source_offset));
+    }
+
+    if (lossy) {
+        auto output = String::with_capacity(bytes.len());
+        for (auto scalar : rstd::str_::utf8_lossy_indices(bytes.as_slice()))
+            output.push(scalar.value);
+        return Ok(rstd::move(output));
     }
 
     auto decoded = String::from_utf8(rstd::move(bytes));
@@ -69,14 +73,17 @@ auto decode(ref<str> input, bool plus_as_space) -> rstd::Result<String, QueryErr
     return Ok(rstd::move(decoded).unwrap());
 }
 
-auto encode(ref<str> input, bool space_as_plus) -> String {
+auto encode(ref<str> input, bool form) -> String {
     auto output = String::make();
     for (usize offset {}; offset < input.size(); ++offset) {
-        auto value = input[offset];
-        auto raw   = value.to_primitive();
-        if (parser::ascii::unreserved(value)) {
+        auto value     = input[offset];
+        auto raw       = value.to_primitive();
+        auto unchanged = form ? (rstd::ascii::is_alnum(value) || raw == '*' || raw == '-' ||
+                                 raw == '.' || raw == '_')
+                              : parser::ascii::unreserved(value);
+        if (unchanged) {
             output.push_ascii(value);
-        } else if (space_as_plus && raw == ' ') {
+        } else if (form && raw == ' ') {
             output.push_ascii(u8('+'));
         } else {
             output.push_ascii(u8('%'));
@@ -152,14 +159,21 @@ auto QueryParams::parse_form(ref<str> input) -> rstd::Result<QueryParams, QueryE
     return parse_with_mode(input, true);
 }
 
-auto QueryParams::parse_with_mode(ref<str> input, bool form)
+auto QueryParams::parse_form_lossy(ref<str> input) -> QueryParams {
+    return parse_with_mode(input, true, true).unwrap();
+}
+
+auto QueryParams::parse_with_mode(ref<str> input, bool form, bool lossy)
     -> rstd::Result<QueryParams, QueryError> {
     auto  result = QueryParams {};
     usize pair_begin {};
-    while (pair_begin <= input.size()) {
+    while (pair_begin < input.size()) {
         usize pair_end = pair_begin;
         while (pair_end < input.size() && input[pair_end].to_primitive() != '&') ++pair_end;
-        if (pair_end == pair_begin && pair_end == input.size()) break;
+        if (lossy && pair_end == pair_begin) {
+            pair_begin = pair_end + usize(1);
+            continue;
+        }
 
         usize separator = pair_begin;
         while (separator < pair_end && input[separator].to_primitive() != '=') ++separator;
@@ -167,11 +181,11 @@ auto QueryParams::parse_with_mode(ref<str> input, bool form)
         auto value_begin = separator < pair_end ? separator + usize(1) : pair_end;
         auto value_text  = *input.get(value_begin, pair_end);
 
-        auto name = form ? decode_form_component(name_text) : decode_component(name_text);
+        auto name = decode(name_text, form, lossy);
         if (name.is_err()) {
             return Err(rebase(rstd::move(name).unwrap_err(), pair_begin));
         }
-        auto value = form ? decode_form_component(value_text) : decode_component(value_text);
+        auto value = decode(value_text, form, lossy);
         if (value.is_err()) {
             return Err(rebase(rstd::move(value).unwrap_err(), value_begin));
         }
@@ -276,6 +290,10 @@ auto encode_form_component(ref<str> input) -> String {
 
 auto decode_form_component(ref<str> input) -> rstd::Result<String, QueryError> {
     return decode(input, true);
+}
+
+auto decode_form_component_lossy(ref<str> input) -> String {
+    return decode(input, true, true).unwrap();
 }
 
 } // namespace lihttpto

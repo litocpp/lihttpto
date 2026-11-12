@@ -68,6 +68,11 @@ public:
     [[nodiscard]]
     static auto parse_form(ref<str> input) -> Result<QueryParams, QueryError>;
 
+    /// Preserves invalid escapes and replaces invalid UTF-8 after form decoding.
+    /// Empty '&' segments are ignored; pair order and duplicate names are retained.
+    [[nodiscard]]
+    static auto parse_form_lossy(ref<str> input) -> QueryParams;
+
     void add(ref<str> name, ref<str> value);
     void set(ref<str> name, ref<str> value);
 
@@ -99,7 +104,8 @@ public:
     auto clone() const -> QueryParams;
 
 private:
-    static auto parse_with_mode(ref<str> input, bool form) -> Result<QueryParams, QueryError>;
+    static auto parse_with_mode(ref<str> input, bool form, bool lossy = false)
+        -> Result<QueryParams, QueryError>;
 
     auto encode_with_mode(bool form) const -> String;
 
@@ -112,11 +118,16 @@ auto encode_component(ref<str> input) -> String;
 export [[nodiscard]]
 auto decode_component(ref<str> input) -> Result<String, QueryError>;
 
+/// Encodes spaces as '+', preserves '*', and escapes '~'.
 export [[nodiscard]]
 auto encode_form_component(ref<str> input) -> String;
 
 export [[nodiscard]]
 auto decode_form_component(ref<str> input) -> Result<String, QueryError>;
+
+/// Treats '+' as space, preserves invalid escapes, and replaces invalid UTF-8.
+export [[nodiscard]]
+auto decode_form_component_lossy(ref<str> input) -> String;
 
 } // namespace lihttpto
 
