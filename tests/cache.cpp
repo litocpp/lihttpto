@@ -11,6 +11,7 @@ TEST(HttpCacheFields, DirectivesDatesAndValidators) {
     auto fields = lihttpto::CacheFields::parse(headers);
     EXPECT_TRUE(fields.control.private_response);
     EXPECT_TRUE(fields.control.no_cache);
+    EXPECT_TRUE(! fields.control.only_if_cached);
     EXPECT_EQ(*fields.control.max_age, i64(60));
     EXPECT_EQ(fields.etag->as_str(), "W/\"a,b\""_str);
     EXPECT_TRUE(lihttpto::entity_tag_matches("\"other\", \"a,b\""_str, "W/\"a,b\""_str));
@@ -19,6 +20,8 @@ TEST(HttpCacheFields, DirectivesDatesAndValidators) {
     EXPECT_EQ(*lihttpto::http_date("Sunday, 06-Nov-94 08:49:37 GMT"_str), i64(784111777));
     EXPECT_EQ(*lihttpto::http_date("Sun Nov  6 08:49:37 1994"_str), i64(784111777));
     EXPECT_TRUE(lihttpto::http_date("Sun, 31 Feb 1994 08:49:37 GMT"_str).is_none());
+    headers.push(lihttpto::Header::make("cache-control"_str, "Only-If-Cached"_bytes).unwrap());
+    EXPECT_TRUE(lihttpto::CacheControl::parse(headers).only_if_cached);
     headers.push(lihttpto::Header::make("cache-control"_str, "max-age=120"_bytes).unwrap());
     EXPECT_FALSE(lihttpto::CacheFields::parse(headers).reusable);
 }
@@ -74,6 +77,12 @@ TEST(Cache, PolicyKeepsAgeAcrossValidation) {
     EXPECT_EQ(policy.age(i64(105)), i64(15));
     EXPECT_TRUE(policy.fresh(i64(105), {}));
     EXPECT_FALSE(policy.fresh(i64(160), {}));
+    EXPECT_FALSE(policy.fresh(i64(101), {}));
+    lihttpto::Headers request;
+    request.add("Cache-Control"_str, "no-store"_str).unwrap();
+    EXPECT_FALSE(policy.fresh(i64(105), lihttpto::CacheControl::parse(request)));
+    headers.add("Cache-Control"_str, "must-understand"_str).unwrap();
+    EXPECT_FALSE(lihttpto::CacheFields::parse(headers).reusable);
 }
 
 TEST(HttpAge, OrderedListAndSaturation) {

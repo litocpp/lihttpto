@@ -19,8 +19,15 @@ struct PublicSuffixPolicy {
 struct CookieOptions {
     usize max_entries { 3000 }, max_cookie_bytes { 4096 };
     Option<rstd::sync::Arc<rstd::dyn<PublicSuffixPolicy>>> suffixes;
+    // Without a suffix policy this permits cookies scoped to public suffixes.
+    bool allow_unverified_suffixes {};
+    // Permits insecure origins to set cookies later sent over HTTPS.
+    bool allow_secure_from_insecure {};
+    bool retain_expired_replacements {};
+    Option<i64> max_age_expiry;
     auto                                                   clone() const -> CookieOptions {
-        return { max_entries, max_cookie_bytes, suffixes.clone() };
+        return { max_entries, max_cookie_bytes, suffixes.clone(), allow_unverified_suffixes,
+                 allow_secure_from_insecure, retain_expired_replacements, max_age_expiry };
     }
 };
 struct StoredCookie {
@@ -28,9 +35,13 @@ struct StoredCookie {
     String      domain, path;
     Option<i64> expires;
     bool        host_only { true }, secure {}, http_only {};
+    String      raw_cookie;
+    bool        path_explicit {};
+    unsigned    expiry_nanoseconds {};
     auto        clone() const -> StoredCookie {
         return {
-            cookie.clone(), domain.clone(), path.clone(), expires, host_only, secure, http_only
+            cookie.clone(), domain.clone(), path.clone(), expires, host_only, secure, http_only,
+            raw_cookie.clone(), path_explicit, expiry_nanoseconds
         };
     }
 };
@@ -53,6 +64,9 @@ public:
     auto store(const SetCookie& cookie, const Url& origin, i64 now) -> bool;
     auto select(const Url& target, i64 now) -> CookieHeader;
     auto snapshot(i64 now) -> Vec<StoredCookie>;
+    auto snapshot_all() const -> Vec<StoredCookie>;
+    // Restores trusted persisted state; a configured suffix policy is still enforced.
+    auto replace_snapshot(Vec<StoredCookie> cookies) -> Result<empty, CookieFileError>;
     auto import_netscape(ref<str> input, i64 now) -> Result<empty, CookieFileError>;
     auto export_netscape(i64 now) -> String;
     void clear() { entries_.clear(); }

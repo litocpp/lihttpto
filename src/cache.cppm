@@ -36,8 +36,8 @@ auto header_text(const Headers& headers, ref<str> name) -> Option<ref<str>> {
     return value.is_ok() ? *value : None<ref<str>>();
 }
 struct CacheControl {
-    bool no_store {}, no_cache {}, must_revalidate {}, private_response {}, public_response {},
-        invalid {};
+    bool no_store {}, no_cache {}, only_if_cached {}, must_revalidate {}, must_understand {},
+        private_response {}, public_response {}, invalid {};
     Option<i64> max_age, min_fresh;
     static auto parse(const Headers& headers) -> CacheControl {
         CacheControl result;
@@ -76,8 +76,12 @@ struct CacheControl {
                     result.no_store = true;
                 else if (name == "no-cache"_str)
                     result.no_cache = true;
+                else if (name == "only-if-cached"_str)
+                    result.only_if_cached = true;
                 else if (name == "must-revalidate"_str)
                     result.must_revalidate = true;
+                else if (name == "must-understand"_str)
+                    result.must_understand = true;
                 else if (name == "private"_str)
                     result.private_response = true;
                 else if (name == "public"_str)
@@ -152,7 +156,8 @@ struct CacheFields {
                 result.vary.push(rstd::move(token));
             }
         }
-        if (result.control.no_store || result.control.invalid) result.reusable = false;
+        if (result.control.no_store || result.control.must_understand || result.control.invalid)
+            result.reusable = false;
         return result;
     }
 };
@@ -183,7 +188,8 @@ struct CachePolicy {
                    : i64();
     }
     auto fresh(i64 now, const lihttpto::CacheControl& request) const -> bool {
-        if (! fields.reusable || fields.control.no_cache || request.no_cache || request.invalid)
+        if (! fields.reusable || fields.control.no_cache || request.no_cache || request.no_store ||
+            request.invalid || now < response_time)
             return false;
         auto limit = lifetime();
         if (request.max_age.is_some()) limit = rstd::min(limit, *request.max_age);
