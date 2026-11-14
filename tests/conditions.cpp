@@ -17,10 +17,14 @@ TEST(ContentRange, ParsesAndValidatesBounds) {
     ASSERT_TRUE(unsatisfied.is_some());
     EXPECT_TRUE(unsatisfied->range.is_none());
     EXPECT_EQ(*unsatisfied->total, u64());
-    for (auto text : array<ref<str>, 8> { "bytes */*"_str, "bytes 5-4/10"_str,
-        "bytes 0-10/10"_str, "bytes 0-0/0"_str, "bytes -1-2/10"_str,
-        "bytes 0-18446744073709551615/*"_str, "bytes 0-1/18446744073709551616"_str,
-        "bytes 0-1/10, bytes 2-3/10"_str })
+    for (auto text : array<ref<str>, 8> { "bytes */*"_str,
+                                          "bytes 5-4/10"_str,
+                                          "bytes 0-10/10"_str,
+                                          "bytes 0-0/0"_str,
+                                          "bytes -1-2/10"_str,
+                                          "bytes 0-18446744073709551615/*"_str,
+                                          "bytes 0-1/18446744073709551616"_str,
+                                          "bytes 0-1/10, bytes 2-3/10"_str })
         EXPECT_TRUE(ContentRange::parse(text).is_none());
 }
 

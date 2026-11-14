@@ -51,7 +51,7 @@ auto cookie_age(ref<str> value) -> Option<i64> {
 }
 auto CookieStorage::allowed_domain(ref<str> domain) const -> bool {
     return options_.suffixes.is_some() ? ! (*options_.suffixes)->is_public_suffix(domain)
-                                      : options_.allow_unverified_suffixes;
+                                       : options_.allow_unverified_suffixes;
 }
 void CookieStorage::expire(i64 now) {
     for (usize i {}; i < entries_.len();) {
@@ -76,7 +76,7 @@ void CookieStorage::insert(StoredCookie cookie, i64 now) {
             for (auto& old : entries_)
                 if (old.domain == cookie.domain && old.path == cookie.path &&
                     old.cookie.name() == cookie.cookie.name()) {
-                    old.expires = Some(i64());
+                    old.expires            = Some(i64());
                     old.expiry_nanoseconds = 0;
                     break;
                 }
@@ -99,10 +99,15 @@ void CookieStorage::insert(StoredCookie cookie, i64 now) {
 auto CookieStorage::store(const SetCookie& input, const Url& origin, i64 now) -> bool {
     auto http = origin.http_origin();
     if (http.is_none() || input.encode().len() > options_.max_cookie_bytes) return false;
-    StoredCookie cookie {
-        input.cookie().clone(), http->host.clone(), default_cookie_path(origin), {}, true,
-        input.secure(),         input.http_only(), input.encode(), false
-    };
+    StoredCookie   cookie { input.cookie().clone(),
+                            http->host.clone(),
+                            default_cookie_path(origin),
+                            {},
+                            true,
+                            input.secure(),
+                            input.http_only(),
+                            input.encode(),
+                            false };
     Option<i64>    age;
     Option<String> domain_attribute;
     bool           invalid_domain {};
@@ -142,7 +147,8 @@ auto CookieStorage::store(const SetCookie& input, const Url& origin, i64 now) ->
         cookie.domain    = rstd::move(domain);
         cookie.host_only = ! accepted;
     }
-    if (cookie.secure && http->scheme.as_str() != "https"_str && ! options_.allow_secure_from_insecure)
+    if (cookie.secure && http->scheme.as_str() != "https"_str &&
+        ! options_.allow_secure_from_insecure)
         return false;
     if (age.is_some()) {
         cookie.expires = Some(i64(*age <= i64()           ? i64::MIN
@@ -193,12 +199,13 @@ auto CookieStorage::replace_snapshot(Vec<StoredCookie> cookies) -> Result<empty,
     if (cookies.len() > options_.max_entries) return Err(CookieFileError(usize()));
     for (usize i {}; i < cookies.len(); ++i) {
         auto& cookie = cookies[i];
-        auto domain = canonical_cookie_domain(cookie.domain.as_str());
+        auto  domain = canonical_cookie_domain(cookie.domain.as_str());
         if (domain.is_none() || ! cookie.path.as_str().starts_with("/"_str) ||
             cookie.cookie.encode().len() > options_.max_cookie_bytes ||
             cookie.expiry_nanoseconds >= 1000000000U ||
             (cookie.expires.is_none() && cookie.expiry_nanoseconds != 0) ||
-            (! cookie.host_only && options_.suffixes.is_some() && ! allowed_domain(domain->as_str())))
+            (! cookie.host_only && options_.suffixes.is_some() &&
+             ! allowed_domain(domain->as_str())))
             return Err(CookieFileError(i + usize(1)));
         for (auto ch : cookie.path.as_str().as_bytes())
             if (ch < u8(32) || ch == u8(127)) return Err(CookieFileError(i + usize(1)));

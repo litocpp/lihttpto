@@ -19,8 +19,8 @@ struct ByteRange {
 };
 struct ContentRange {
     Option<ByteRange> range;
-    Option<u64> total;
-    static auto parse(ref<str> text) -> Option<ContentRange>;
+    Option<u64>       total;
+    static auto       parse(ref<str> text) -> Option<ContentRange>;
 };
 struct RepresentationDecision {
     RepresentationKind kind { RepresentationKind::Full };

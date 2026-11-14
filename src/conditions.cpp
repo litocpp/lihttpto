@@ -32,12 +32,12 @@ auto ContentRange::parse(ref<str> input) -> Option<ContentRange> {
         ! ascii_equal(text.get(usize(), usize(5)).unwrap().as_bytes(), "bytes"_str) ||
         text.as_bytes()[usize(5)] != u8(' '))
         return None();
-    auto value = text.get(usize(6), text.len()).unwrap();
+    auto  value = text.get(usize(6), text.len()).unwrap();
     usize slash {};
     while (slash < value.len() && value.as_bytes()[slash] != u8('/')) ++slash;
     if (slash == value.len()) return None();
-    auto interval = value.get(usize(), slash).unwrap();
-    auto size = value.get(slash + usize(1), value.len()).unwrap();
+    auto        interval = value.get(usize(), slash).unwrap();
+    auto        size     = value.get(slash + usize(1), value.len()).unwrap();
     Option<u64> total;
     if (size != "*"_str) {
         total = range_number(size);
@@ -51,9 +51,9 @@ auto ContentRange::parse(ref<str> input) -> Option<ContentRange> {
     while (dash < interval.len() && interval.as_bytes()[dash] != u8('-')) ++dash;
     if (dash == interval.len()) return None();
     auto first = range_number(interval.get(usize(), dash).unwrap());
-    auto last = range_number(interval.get(dash + usize(1), interval.len()).unwrap());
-    if (first.is_none() || last.is_none() || *last < *first ||
-        (total.is_some() && *last >= *total)) return None();
+    auto last  = range_number(interval.get(dash + usize(1), interval.len()).unwrap());
+    if (first.is_none() || last.is_none() || *last < *first || (total.is_some() && *last >= *total))
+        return None();
     auto length = (*last - *first).checked_add(u64(1));
     if (length.is_none()) return None();
     return Some(ContentRange { Some(ByteRange { *first, *length }), total });

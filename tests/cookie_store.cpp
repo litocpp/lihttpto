@@ -69,21 +69,21 @@ TEST(CookieStorage, CookieDatesAreIndependentOfHttpDateGrammar) {
 }
 TEST(CookieStorage, ExplicitUnverifiedSuffixAndInsecureSourcePolicy) {
     CookieOptions options;
-    options.allow_unverified_suffixes = true;
+    options.allow_unverified_suffixes  = true;
     options.allow_secure_from_insecure = true;
     CookieStorage store(rstd::move(options));
-    auto origin = Url::parse_http("http://api.example.com/foo"_str).unwrap();
-    EXPECT_TRUE(store.store(SetCookie::parse("shared=one; Domain=example.com; Path=/"_str).unwrap(),
-                            origin, i64(100)));
-    EXPECT_TRUE(store.store(SetCookie::parse("secure=two; Secure; Path=/"_str).unwrap(),
-                            origin, i64(100)));
+    auto          origin = Url::parse_http("http://api.example.com/foo"_str).unwrap();
+    EXPECT_TRUE(store.store(
+        SetCookie::parse("shared=one; Domain=example.com; Path=/"_str).unwrap(), origin, i64(100)));
+    EXPECT_TRUE(
+        store.store(SetCookie::parse("secure=two; Secure; Path=/"_str).unwrap(), origin, i64(100)));
     auto sibling = Url::parse_http("http://www.example.com/"_str).unwrap();
     EXPECT_EQ(store.select(sibling, i64(100)).encode().as_str(), "shared=one"_str);
     EXPECT_TRUE(store.select(origin, i64(100)).get("secure"_str).is_none());
     auto secure = Url::parse_http("https://api.example.com/"_str).unwrap();
     EXPECT_TRUE(store.select(secure, i64(100)).get("secure"_str).is_some());
-    EXPECT_FALSE(store.store(SetCookie::parse("bad=1; Domain=other.test"_str).unwrap(),
-                             origin, i64(100)));
+    EXPECT_FALSE(
+        store.store(SetCookie::parse("bad=1; Domain=other.test"_str).unwrap(), origin, i64(100)));
 }
 TEST(CookieStorage, PersistenceIsTransactionalAndRetainsHttpOnlyAndSessionCookies) {
     CookieStorage store(rules());
@@ -111,10 +111,13 @@ TEST(CookieStorage, PersistenceIsTransactionalAndRetainsHttpOnlyAndSessionCookie
 }
 TEST(CookieStorage, SnapshotPreservesMetadataAndRestoresAtomically) {
     CookieStorage original(rules());
-    auto url = Url::parse_http("https://api.example.com/a/b"_str).unwrap();
-    EXPECT_TRUE(original.store(SetCookie::parse(
-        "sid=one; Domain=example.com; Path=/a; Secure; HttpOnly; SameSite=Lax; Max-Age=2"_str).unwrap(),
-        url, i64(100)));
+    auto          url = Url::parse_http("https://api.example.com/a/b"_str).unwrap();
+    EXPECT_TRUE(original.store(
+        SetCookie::parse(
+            "sid=one; Domain=example.com; Path=/a; Secure; HttpOnly; SameSite=Lax; Max-Age=2"_str)
+            .unwrap(),
+        url,
+        i64(100)));
     EXPECT_TRUE(original.store(SetCookie::parse("session=two"_str).unwrap(), url, i64(100)));
     EXPECT_EQ(original.select(url, i64(102)).encode().as_str(), "session=two"_str);
     auto snapshot = original.snapshot_all();
@@ -128,7 +131,7 @@ TEST(CookieStorage, SnapshotPreservesMetadataAndRestoresAtomically) {
     EXPECT_TRUE(restored.replace_snapshot(rstd::move(snapshot)).is_ok());
     EXPECT_EQ(restored.snapshot_all().len(), usize(2));
     EXPECT_EQ(restored.select(url, i64(102)).encode().as_str(), "session=two"_str);
-    auto invalid = restored.snapshot_all();
+    auto invalid            = restored.snapshot_all();
     invalid[usize()].domain = String::make("com"_str);
     EXPECT_TRUE(restored.replace_snapshot(rstd::move(invalid)).is_err());
     EXPECT_EQ(restored.snapshot_all().len(), usize(2));
@@ -136,21 +139,24 @@ TEST(CookieStorage, SnapshotPreservesMetadataAndRestoresAtomically) {
 TEST(CookieStorage, RetainsExpiredReplacementsAndBoundsMaxAgeWhenConfigured) {
     CookieOptions options;
     options.retain_expired_replacements = true;
-    options.max_age_expiry = Some(i64(253402300799LL));
+    options.max_age_expiry              = Some(i64(253402300799LL));
     CookieStorage store(rstd::move(options));
-    auto url = Url::parse_http("https://example.test/"_str).unwrap();
-    EXPECT_TRUE(store.store(SetCookie::parse("sid=old; Path=/; HttpOnly"_str).unwrap(), url, i64(100)));
-    EXPECT_TRUE(store.store(SetCookie::parse("sid=deleted; Path=/; Max-Age=0"_str).unwrap(), url, i64(100)));
+    auto          url = Url::parse_http("https://example.test/"_str).unwrap();
+    EXPECT_TRUE(
+        store.store(SetCookie::parse("sid=old; Path=/; HttpOnly"_str).unwrap(), url, i64(100)));
+    EXPECT_TRUE(store.store(
+        SetCookie::parse("sid=deleted; Path=/; Max-Age=0"_str).unwrap(), url, i64(100)));
     EXPECT_TRUE(store.select(url, i64(100)).is_empty());
     auto expired = store.snapshot_all();
     ASSERT_EQ(expired.len(), usize(1));
     EXPECT_EQ(expired[usize()].cookie.value(), "old"_str);
     EXPECT_TRUE(expired[usize()].http_only);
     EXPECT_EQ(*expired[usize()].expires, i64(0));
-    EXPECT_TRUE(store.store(SetCookie::parse("never=added; Max-Age=0"_str).unwrap(), url, i64(100)));
+    EXPECT_TRUE(
+        store.store(SetCookie::parse("never=added; Max-Age=0"_str).unwrap(), url, i64(100)));
     EXPECT_EQ(store.snapshot_all().len(), usize(1));
-    EXPECT_TRUE(store.store(SetCookie::parse("long=life; Max-Age=9223372036854775807"_str).unwrap(),
-                            url, i64(100)));
+    EXPECT_TRUE(store.store(
+        SetCookie::parse("long=life; Max-Age=9223372036854775807"_str).unwrap(), url, i64(100)));
     auto snapshot = store.snapshot_all();
     ASSERT_EQ(snapshot.len(), usize(2));
     EXPECT_EQ(*snapshot[usize(1)].expires, i64(253402300799LL));

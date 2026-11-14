@@ -22,12 +22,17 @@ struct CookieOptions {
     // Without a suffix policy this permits cookies scoped to public suffixes.
     bool allow_unverified_suffixes {};
     // Permits insecure origins to set cookies later sent over HTTPS.
-    bool allow_secure_from_insecure {};
-    bool retain_expired_replacements {};
+    bool        allow_secure_from_insecure {};
+    bool        retain_expired_replacements {};
     Option<i64> max_age_expiry;
-    auto                                                   clone() const -> CookieOptions {
-        return { max_entries, max_cookie_bytes, suffixes.clone(), allow_unverified_suffixes,
-                 allow_secure_from_insecure, retain_expired_replacements, max_age_expiry };
+    auto        clone() const -> CookieOptions {
+        return { max_entries,
+                 max_cookie_bytes,
+                 suffixes.clone(),
+                 allow_unverified_suffixes,
+                 allow_secure_from_insecure,
+                 retain_expired_replacements,
+                 max_age_expiry };
     }
 };
 struct StoredCookie {
@@ -39,10 +44,10 @@ struct StoredCookie {
     bool        path_explicit {};
     unsigned    expiry_nanoseconds {};
     auto        clone() const -> StoredCookie {
-        return {
-            cookie.clone(), domain.clone(), path.clone(), expires, host_only, secure, http_only,
-            raw_cookie.clone(), path_explicit, expiry_nanoseconds
-        };
+        return { cookie.clone(),    domain.clone(),     path.clone(),
+                 expires,           host_only,          secure,
+                 http_only,         raw_cookie.clone(), path_explicit,
+                 expiry_nanoseconds };
     }
 };
 class CookieFileError {
