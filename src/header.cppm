@@ -207,6 +207,35 @@ public:
 namespace rstd
 {
 export template<>
+struct Impl<fmt::Debug, lihttpto::HeaderName> : ImplBase<lihttpto::HeaderName> {
+    auto fmt(fmt::Formatter& formatter) const -> bool {
+        auto text = this->self().as_str();
+        return as<fmt::Debug>(text).fmt(formatter);
+    }
+};
+export template<>
+struct Impl<fmt::Debug, lihttpto::HeaderValue> : ImplBase<lihttpto::HeaderValue> {
+    auto fmt(fmt::Formatter& formatter) const -> bool {
+        auto bytes = this->self().as_slice();
+        return as<fmt::Debug>(bytes).fmt(formatter);
+    }
+};
+export template<>
+struct Impl<fmt::Debug, lihttpto::Header> : ImplBase<lihttpto::Header> {
+    auto fmt(fmt::Formatter& formatter) const -> bool {
+        const auto&      header = this->self();
+        fmt::DebugStruct output(formatter, "Header"_str);
+        return output.field("name"_str, header.name).field("value"_str, header.value).finish();
+    }
+};
+export template<>
+struct Impl<fmt::Debug, lihttpto::Headers> : ImplBase<lihttpto::Headers> {
+    auto fmt(fmt::Formatter& formatter) const -> bool {
+        auto fields = this->self().as_slice();
+        return as<fmt::Debug>(fields).fmt(formatter);
+    }
+};
+export template<>
 struct Impl<fmt::Display, lihttpto::HeaderError> : ImplBase<lihttpto::HeaderError> {
     auto fmt(fmt::Formatter& formatter) const -> bool {
         const auto& error = this->self();

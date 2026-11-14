@@ -90,6 +90,32 @@ TEST(Header, ReplacementIsAtomicAndCloneOwnsFields) {
     EXPECT_TRUE(headers.contains("X-Test"_str));
 }
 
+TEST(Header, DebugKeepsFieldNamesDuplicateEntriesAndRawBytes) {
+    Headers headers;
+    headers.add("X-Test"_str, "first"_str).unwrap();
+    headers.add("x-test"_str, "second"_str).unwrap();
+    const array<u8, 3> raw { u8('\t'), u8(128), u8(255) };
+    headers.push(Header::make("X-Raw"_str, raw.as_slice()).unwrap());
+    EXPECT_EQ(rstd::format("{:?}", headers[usize()].name), "\"X-Test\""_str);
+    EXPECT_EQ(rstd::format("{:?}", headers[usize(2)].value), "[9, 128, 255]"_str);
+    EXPECT_EQ(rstd::format("{:?}", headers),
+              "[Header { name: \"X-Test\", value: [102, 105, 114, 115, 116] }, "
+              "Header { name: \"x-test\", value: [115, 101, 99, 111, 110, 100] }, "
+              "Header { name: \"X-Raw\", value: [9, 128, 255] }]"_str);
+    EXPECT_EQ(headers.len(), usize(3));
+    EXPECT_EQ(headers[usize(2)].value.as_slice(), raw.as_slice());
+}
+
+TEST(Header, DebugForwardsEmptyAndAlternateCollectionFormatting) {
+    Headers headers;
+    EXPECT_EQ(rstd::format("{:?}", headers), "[]"_str);
+    EXPECT_EQ(rstd::format("{:#?}", headers), rstd::format("{:#?}", headers.as_slice()));
+    headers.add("Retry-After"_str, "30"_str).unwrap();
+    EXPECT_EQ(rstd::format("{:#?}", headers), rstd::format("{:#?}", headers.as_slice()));
+    EXPECT_TRUE(rstd::format("{:#?}", headers).as_str().contains("name: \"Retry-After\""_str));
+    EXPECT_TRUE(rstd::format("{:#?}", headers).as_str().contains("value:"_str));
+}
+
 TEST(Header, TransportMetadataDoesNotRelaxHttp1WireParsing) {
     for (auto line : array<ref<str>, 2> { "HTTP/2 200\r\n\r\n"_str, "HTTP/3 204\r\n\r\n"_str }) {
         Http1HeadParser wire;
