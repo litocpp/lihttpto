@@ -643,6 +643,75 @@ auto Url::parse(ref<str> input, const Url& base) -> Result<Url, UrlError> {
 auto Url::resolve(ref<str> input) const -> Result<Url, UrlError> {
     return parse(input, *this);
 }
+auto Url::to_file_path() const -> Result<rstd::path::PathBuf, UrlError> {
+    using rstd::path::PathBuf;
+    if (record_.scheme != "file"_str)
+        return Err(UrlError(UrlErrorKind::UnsupportedScheme(), usize()));
+    const auto host = record_.host.is_some() ? record_.host->serialize() : String();
+#if RSTD_OS_WINDOWS
+    if ((! host.is_empty() && record_.host->kind == Host::Kind::Ipv6) || host == "."_str)
+        return Err(UrlError(UrlErrorKind::UnsupportedHost(), host_.offset));
+#else
+    if (! host.is_empty()) return Err(UrlError(UrlErrorKind::UnsupportedHost(), host_.offset));
+#endif
+    Vec<u8> bytes = Vec<u8>::with_capacity(path_.size + host.len() + usize(2));
+#if RSTD_OS_WINDOWS
+    if (! host.is_empty()) {
+        bytes.push(u8('\\'));
+        bytes.push(u8('\\'));
+        bytes.extend_from_slice(host.as_str().as_bytes());
+    }
+#endif
+    usize offset = path_.offset;
+    for (usize segment_index; segment_index < record_.segments.len(); ++segment_index) {
+        const auto segment = record_.segments[segment_index].as_str();
+        ++offset;
+#if RSTD_OS_WINDOWS
+        if (segment_index != usize() || ! host.is_empty()) bytes.push(u8('\\'));
+        const auto begin = bytes.len();
+#else
+        bytes.push(u8('/'));
+#endif
+        for (usize i; i < segment.len(); ++i) {
+            auto byte = segment[i];
+            if (byte == u8('%') && i + usize(2) < segment.len()) {
+                const auto high = url_hex(segment[i + usize(1)]);
+                const auto low  = url_hex(segment[i + usize(2)]);
+                if (high >= 0 && low >= 0) {
+                    byte = u8(static_cast<unsigned>(high * 16 + low));
+                    if (byte == u8())
+                        return Err(UrlError(UrlErrorKind::InvalidCharacter(), offset + i));
+                    i += usize(2);
+                }
+            }
+            if (byte == u8()) return Err(UrlError(UrlErrorKind::InvalidCharacter(), offset + i));
+            bytes.push(u8(byte));
+        }
+#if RSTD_OS_WINDOWS
+        if (segment_index == usize()) {
+            if (host.is_empty()) {
+                if (bytes.len() - begin != usize(2) || ! rstd::ascii::is_alpha(bytes[begin]) ||
+                    bytes[begin + usize(1)] != u8(':'))
+                    return Err(UrlError(UrlErrorKind::InvalidSyntax(), offset));
+                if (record_.segments.len() == usize(1)) bytes.push(u8('\\'));
+            } else if (bytes.len() == begin)
+                return Err(UrlError(UrlErrorKind::InvalidSyntax(), offset));
+        }
+#endif
+        offset += segment.len();
+    }
+#if RSTD_OS_WINDOWS
+    auto decoded = String::from_utf8(rstd::move(bytes));
+    if (decoded.is_err()) return Err(UrlError(UrlErrorKind::InvalidCharacter(), path_.offset));
+    auto result = PathBuf::from(rstd::move(*decoded));
+    if (! result.as_path().is_absolute())
+        return Err(UrlError(UrlErrorKind::InvalidSyntax(), path_.offset));
+    return Ok(rstd::move(result));
+#else
+    if (bytes.is_empty()) bytes.push(u8('/'));
+    return Ok(PathBuf::from(rstd::ffi::OsString::from_encoded_bytes_unchecked(rstd::move(bytes))));
+#endif
+}
 auto Url::parse_http(ref<str> input) -> Result<Url, UrlError> {
     auto url = rstd_try(parse(input));
     if (url.record_.scheme != "http"_str && url.record_.scheme != "https"_str)

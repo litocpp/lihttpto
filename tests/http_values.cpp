@@ -1036,3 +1036,50 @@ TEST(MediaType, ContentTypeEssenceAndParameters) {
                                                  "application/json;"_str })
         EXPECT_TRUE(lihttpto::MediaType::parse(value).is_err());
 }
+
+TEST(HttpValues, FileUrlToPathDecodesOnceAndExcludesQueryAndFragment) {
+    auto url =
+        lihttpto::Url::parse(
+            "file://localhost/C:/music/%E9%9F%B3%E4%B9%90/100%25%2520+%zz.flac?download=1#track"_str)
+            .unwrap();
+    auto path = url.to_file_path().unwrap();
+#if RSTD_OS_WINDOWS
+    EXPECT_EQ(path.as_path().to_str().unwrap(), "C:\\music\\音乐\\100%%20+%zz.flac"_str);
+#else
+    EXPECT_EQ(path.as_path().to_str().unwrap(), "/C:/music/音乐/100%%20+%zz.flac"_str);
+#endif
+    EXPECT_EQ(url.scheme().unwrap(), "file"_str);
+    EXPECT_EQ(url.query().unwrap(), "download=1"_str);
+    EXPECT_EQ(url.fragment().unwrap(), "track"_str);
+}
+
+TEST(HttpValues, FileUrlToPathRejectsNonFileAndDecodedNul) {
+    auto web = lihttpto::Url::parse("https://example.com/file"_str).unwrap().to_file_path();
+    ASSERT_TRUE(web.is_err());
+    EXPECT_TRUE(web.unwrap_err().kind().is_UnsupportedScheme());
+    auto nul = lihttpto::Url::parse("file:///C:/music/a%00b.flac"_str).unwrap().to_file_path();
+    ASSERT_TRUE(nul.is_err());
+    EXPECT_TRUE(nul.unwrap_err().kind().is_InvalidCharacter());
+}
+
+TEST(HttpValues, FileUrlToPathUsesPlatformHostAndByteRules) {
+    auto remote = lihttpto::Url::parse("file://server/share/file.flac"_str).unwrap().to_file_path();
+    auto bytes  = lihttpto::Url::parse("file:///C:/music/%FF"_str).unwrap().to_file_path();
+#if RSTD_OS_WINDOWS
+    ASSERT_TRUE(remote.is_ok());
+    EXPECT_EQ(remote->as_path().to_str().unwrap(), "\\\\server\\share\\file.flac"_str);
+    ASSERT_TRUE(bytes.is_err());
+    EXPECT_TRUE(bytes.unwrap_err().kind().is_InvalidCharacter());
+    EXPECT_TRUE(
+        lihttpto::Url::parse("file:///relative-on-windows"_str).unwrap().to_file_path().is_err());
+#else
+    ASSERT_TRUE(remote.is_err());
+    EXPECT_TRUE(remote.unwrap_err().kind().is_UnsupportedHost());
+    ASSERT_TRUE(bytes.is_ok());
+    EXPECT_TRUE(bytes->as_path().to_str().is_none());
+    auto encoded = bytes->as_path().as_os_str().as_encoded_bytes();
+    EXPECT_EQ(encoded[encoded.len() - usize(1)], u8(255));
+    auto root = lihttpto::Url::parse("file:///"_str).unwrap().to_file_path().unwrap();
+    EXPECT_EQ(root.as_path().to_str().unwrap(), "/"_str);
+#endif
+}

@@ -134,6 +134,10 @@ public:
     [[nodiscard]]
     auto resolve(ref<str> input) const -> Result<Url, UrlError>;
 
+    // Converts a file URL to a native path; query and fragment are not path components.
+    [[nodiscard]]
+    auto to_file_path() const -> Result<rstd::path::PathBuf, UrlError>;
+
     [[nodiscard]]
     auto same_http_origin(const Url& other) const -> bool;
 
