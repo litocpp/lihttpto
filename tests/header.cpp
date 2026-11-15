@@ -30,6 +30,56 @@ TEST(Header, ConstructionValidatesNamesAndPreservesRawValues) {
         EXPECT_TRUE(HeaderValue::make(invalid.as_bytes()).unwrap_err().is_InvalidValue());
 }
 
+TEST(Header, OwnedConstructionRetainsOriginalBuffers) {
+    auto text        = String::make("X-Owned"_str);
+    auto name_buffer = text.as_str().as_bytes().as_raw_ptr();
+    auto name        = HeaderName::make(rstd::move(text)).unwrap();
+    EXPECT_EQ(name.as_str().as_bytes().as_raw_ptr(), name_buffer);
+    EXPECT_EQ(name.as_str(), "X-Owned"_str);
+
+    const array<u8, 3> raw { u8('\t'), u8(128), u8(255) };
+    auto               bytes        = Vec<u8>::from(raw.as_slice());
+    auto               value_buffer = bytes.as_slice().as_raw_ptr();
+    auto               value        = HeaderValue::make(rstd::move(bytes)).unwrap();
+    EXPECT_EQ(value.as_slice().as_raw_ptr(), value_buffer);
+    EXPECT_EQ(value.as_slice(), raw.as_slice());
+    EXPECT_TRUE(value.to_str().unwrap_err().is_InvalidText());
+
+    auto field_name         = String::make("X-Field"_str);
+    auto field_value        = String::make("a\tb"_str).into_bytes();
+    auto field_name_buffer  = field_name.as_str().as_bytes().as_raw_ptr();
+    auto field_value_buffer = field_value.as_slice().as_raw_ptr();
+    auto field = Header::make(rstd::move(field_name), rstd::move(field_value)).unwrap();
+    EXPECT_EQ(field.name.as_str().as_bytes().as_raw_ptr(), field_name_buffer);
+    EXPECT_EQ(field.value.as_slice().as_raw_ptr(), field_value_buffer);
+    EXPECT_EQ(field.name.as_str(), "X-Field"_str);
+    EXPECT_EQ(field.value.to_str().unwrap(), "a\tb"_str);
+}
+
+TEST(Header, OwnedAndBorrowedConstructionUseTheSameValidation) {
+    for (auto invalid :
+         array<ref<str>, 5> { ""_str, "bad name"_str, "bad:name"_str, "x\n"_str, "x\x7f"_str }) {
+        auto borrowed = HeaderName::make(invalid).unwrap_err();
+        auto owned    = HeaderName::make(String::make(invalid)).unwrap_err();
+        EXPECT_TRUE(owned.is_InvalidName());
+        EXPECT_EQ(owned.offset(), borrowed.offset());
+    }
+    for (auto invalid : array<ref<str>, 4> { "x\r\ny"_str, "x\0y"_str, "x\ny"_str, "x\x7fy"_str }) {
+        auto borrowed = HeaderValue::make(invalid.as_bytes()).unwrap_err();
+        auto owned    = HeaderValue::make(String::make(invalid).into_bytes()).unwrap_err();
+        EXPECT_TRUE(owned.is_InvalidValue());
+        EXPECT_EQ(owned.offset(), borrowed.offset());
+    }
+    EXPECT_TRUE(HeaderValue::make(Vec<u8>()).unwrap().as_slice().is_empty());
+    auto invalid_name = Header::make(String::make("bad name"_str), Vec<u8>()).unwrap_err();
+    EXPECT_TRUE(invalid_name.is_InvalidName());
+    auto invalid_value =
+        Header::make(String::make("X-Test"_str), String::make("bad\rvalue"_str).into_bytes())
+            .unwrap_err();
+    EXPECT_TRUE(invalid_value.is_InvalidValue());
+    EXPECT_EQ(invalid_value.offset(), usize(3));
+}
+
 TEST(Header, LineParsingOwnsFieldsAndTrimsOnlySurroundingWhitespace) {
     auto header = Header::parse_line("X-Test:\t a\tb \t"_str.as_bytes()).unwrap();
     EXPECT_EQ(header.name.as_str(), "X-Test"_str);

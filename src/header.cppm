@@ -25,12 +25,21 @@ class HeaderName : public DefaultInClass<HeaderName, Clone> {
     String text_;
     explicit HeaderName(String text): text_(rstd::move(text)) {}
 
-public:
-    static auto make(ref<str> text) -> Result<HeaderName, HeaderError> {
+    static auto validate(ref<str> text) -> Result<empty, HeaderError> {
         rstd::parse::TextCursor cursor(rstd::parse::text_input(text));
         if (rstd::parse::consume_while_one(cursor, token_byte).is_none() || ! cursor.is_eof())
             return Err(HeaderError::InvalidName().at(cursor.position()));
+        return Ok(empty {});
+    }
+
+public:
+    static auto make(ref<str> text) -> Result<HeaderName, HeaderError> {
+        rstd_try(validate(text));
         return Ok(HeaderName { String::make(text) });
+    }
+    static auto make(String text) -> Result<HeaderName, HeaderError> {
+        rstd_try(validate(text.as_str()));
+        return Ok(HeaderName { rstd::move(text) });
     }
     auto as_str() const -> ref<str> { return text_.as_str(); }
     auto clone() const -> HeaderName { return HeaderName { text_.clone() }; }
@@ -42,15 +51,24 @@ class HeaderValue : public DefaultInClass<HeaderValue, Clone> {
     Vec<u8> bytes_;
     explicit HeaderValue(Vec<u8> bytes): bytes_(rstd::move(bytes)) {}
 
-public:
-    static auto make(slice<u8> bytes) -> Result<HeaderValue, HeaderError> {
+    static auto validate(slice<u8> bytes) -> Result<empty, HeaderError> {
         usize offset {};
         for (auto byte : bytes) {
             if (! (byte == u8('\t') || (byte >= u8(32) && byte != u8(127))))
                 return Err(HeaderError::InvalidValue().at(offset));
             ++offset;
         }
+        return Ok(empty {});
+    }
+
+public:
+    static auto make(slice<u8> bytes) -> Result<HeaderValue, HeaderError> {
+        rstd_try(validate(bytes));
         return Ok(HeaderValue { Vec<u8>::from(bytes) });
+    }
+    static auto make(Vec<u8> bytes) -> Result<HeaderValue, HeaderError> {
+        rstd_try(validate(bytes.as_slice()));
+        return Ok(HeaderValue { rstd::move(bytes) });
     }
     auto as_slice() const -> slice<u8> { return bytes_.as_slice(); }
     auto clone() const -> HeaderValue { return HeaderValue { bytes_.clone() }; }
@@ -90,6 +108,11 @@ struct Header : public DefaultInClass<Header, Clone> {
     static auto make(ref<str> name, slice<u8> value) -> Result<Header, HeaderError> {
         auto parsed_name  = rstd_try(HeaderName::make(name));
         auto parsed_value = rstd_try(HeaderValue::make(value));
+        return Ok(Header { rstd::move(parsed_name), rstd::move(parsed_value) });
+    }
+    static auto make(String name, Vec<u8> value) -> Result<Header, HeaderError> {
+        auto parsed_name  = rstd_try(HeaderName::make(rstd::move(name)));
+        auto parsed_value = rstd_try(HeaderValue::make(rstd::move(value)));
         return Ok(Header { rstd::move(parsed_name), rstd::move(parsed_value) });
     }
     // The caller owns line framing; this consumes a field without CR/LF.
