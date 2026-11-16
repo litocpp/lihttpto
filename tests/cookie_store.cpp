@@ -161,6 +161,195 @@ TEST(CookieStorage, RetainsExpiredReplacementsAndBoundsMaxAgeWhenConfigured) {
     ASSERT_EQ(snapshot.len(), usize(2));
     EXPECT_EQ(*snapshot[usize(1)].expires, i64(253402300799LL));
 }
+TEST(CookieStorage, RevisionTracksStoreEraseAndClearWithoutNoops) {
+    CookieStorage store;
+    auto          url    = Url::parse_http("https://example.test/"_str).unwrap();
+    auto          accept = [&](ref<str> text, i64 now = i64(100)) {
+        return store.store(SetCookie::parse(text).unwrap(), url, now);
+    };
+    EXPECT_EQ(store.revision(), Some(u64()));
+    store.clear();
+    store.expire(i64(100));
+    EXPECT_FALSE(store.erase("example.test"_str, "/"_str, "missing"_str));
+    EXPECT_FALSE(accept("bad=one; Domain=other.test"_str));
+    EXPECT_TRUE(accept("missing=one; Max-Age=0"_str));
+    EXPECT_EQ(store.revision(), Some(u64()));
+    ASSERT_TRUE(accept("sid=one"_str));
+    EXPECT_EQ(store.revision(), Some(u64(1)));
+    auto view = store.snapshot_view();
+    static_assert(__is_same(decltype(view[usize()]), const StoredCookie&));
+    ASSERT_EQ(view.len(), usize(1));
+    EXPECT_EQ(view[usize()].cookie.value(), "one"_str);
+    EXPECT_EQ(view.as_raw_ptr(), store.snapshot_view().as_raw_ptr());
+    EXPECT_TRUE(accept("sid=one"_str));
+    EXPECT_EQ(store.revision(), Some(u64(1)));
+    EXPECT_TRUE(accept("sid=two"_str));
+    EXPECT_EQ(store.revision(), Some(u64(2)));
+    EXPECT_TRUE(accept("sid=two; SameSite=Lax"_str));
+    EXPECT_EQ(store.revision(), Some(u64(3)));
+    EXPECT_TRUE(accept("sid=two; Max-Age=10"_str));
+    EXPECT_EQ(store.revision(), Some(u64(4)));
+    EXPECT_TRUE(accept("sid=two; Max-Age=10"_str));
+    EXPECT_EQ(store.revision(), Some(u64(4)));
+    EXPECT_TRUE(accept("sid=two; Max-Age=10"_str, i64(101)));
+    EXPECT_EQ(store.revision(), Some(u64(5)));
+    EXPECT_FALSE(store.erase("example.test"_str, "/other"_str, "sid"_str));
+    EXPECT_EQ(store.revision(), Some(u64(5)));
+    EXPECT_TRUE(store.erase("example.test"_str, "/"_str, "sid"_str));
+    EXPECT_EQ(store.revision(), Some(u64(6)));
+    EXPECT_TRUE(accept("sid=one"_str));
+    EXPECT_TRUE(accept("other=two"_str));
+    store.clear();
+    EXPECT_EQ(store.revision(), Some(u64(9)));
+    store.clear();
+    EXPECT_EQ(store.revision(), Some(u64(9)));
+    EXPECT_TRUE(store.snapshot_view().is_empty());
+}
+TEST(CookieStorage, RevisionTracksEverySnapshotFieldAndOrder) {
+    auto url = Url::parse_http("https://example.test/"_str).unwrap();
+    for (unsigned field = 0; field < 12; ++field) {
+        CookieStorage store;
+        ASSERT_TRUE(store.store(SetCookie::parse("sid=one"_str).unwrap(), url, i64(100)));
+        auto initial = store.snapshot_all();
+        initial[usize()].raw_cookie.clear();
+        initial[usize()].expires = Some(i64(1000));
+        ASSERT_TRUE(store.replace_snapshot(rstd::move(initial)).is_ok());
+        auto  before  = store.revision();
+        auto  changed = store.snapshot_all();
+        auto& cookie  = changed[usize()];
+        switch (field) {
+        case 0: cookie.raw_cookie = "sid=one; SameSite=Lax"_Str; break;
+        case 1: cookie.domain = "other.test"_Str; break;
+        case 2: cookie.path = "/other"_Str; break;
+        case 3: cookie.expires = Some(i64(1001)); break;
+        case 4: cookie.expiry_nanoseconds = 1; break;
+        case 5: cookie.host_only = false; break;
+        case 6: cookie.secure = true; break;
+        case 7: cookie.http_only = true; break;
+        case 8: cookie.path_explicit = true; break;
+        case 9: cookie.cookie = Cookie::parse("sid=two"_str).unwrap(); break;
+        case 10: cookie.cookie = Cookie::parse("sid=\"one\""_str).unwrap(); break;
+        case 11: cookie.cookie = Cookie::parse("other=one"_str).unwrap(); break;
+        }
+        ASSERT_TRUE(store.replace_snapshot(rstd::move(changed)).is_ok());
+        EXPECT_EQ(store.revision(), Some(*before + u64(1)));
+        EXPECT_TRUE(store.replace_snapshot(store.snapshot_all()).is_ok());
+        EXPECT_EQ(store.revision(), Some(*before + u64(1)));
+    }
+    CookieStorage store;
+    ASSERT_TRUE(store.store(SetCookie::parse("a=one"_str).unwrap(), url, i64(100)));
+    ASSERT_TRUE(store.store(SetCookie::parse("b=two"_str).unwrap(), url, i64(100)));
+    auto reordered      = store.snapshot_all();
+    auto first          = rstd::move(reordered[usize()]);
+    reordered[usize()]  = rstd::move(reordered[usize(1)]);
+    reordered[usize(1)] = rstd::move(first);
+    EXPECT_TRUE(store.replace_snapshot(rstd::move(reordered)).is_ok());
+    EXPECT_EQ(store.revision(), Some(u64(3)));
+    EXPECT_EQ(store.snapshot_view()[usize()].cookie.name(), "b"_str);
+    auto equivalent            = store.snapshot_all();
+    equivalent[usize()].domain = ".EXAMPLE.TEST"_Str;
+    EXPECT_TRUE(store.replace_snapshot(rstd::move(equivalent)).is_ok());
+    EXPECT_EQ(store.revision(), Some(u64(3)));
+    auto invalid                        = store.snapshot_all();
+    invalid[usize()].expiry_nanoseconds = 1000000000U;
+    EXPECT_TRUE(store.replace_snapshot(rstd::move(invalid)).is_err());
+    EXPECT_EQ(store.revision(), Some(u64(3)));
+}
+TEST(CookieStorage, RevisionTracksExpirationAndCapacityEviction) {
+    CookieOptions options;
+    options.max_entries = usize(2);
+    CookieStorage store(rstd::move(options));
+    auto          url    = Url::parse_http("https://example.test/"_str).unwrap();
+    auto          accept = [&](ref<str> text, i64 now = i64(100)) {
+        return store.store(SetCookie::parse(text).unwrap(), url, now);
+    };
+    ASSERT_TRUE(accept("a=one; Max-Age=1"_str));
+    ASSERT_TRUE(accept("b=two"_str));
+    EXPECT_EQ(store.select(url, i64(101)).encode().as_str(), "b=two"_str);
+    EXPECT_EQ(store.snapshot_all().len(), usize(2));
+    EXPECT_EQ(store.revision(), Some(u64(2)));
+    ASSERT_TRUE(accept("c=three"_str, i64(101)));
+    EXPECT_EQ(store.revision(), Some(u64(3)));
+    EXPECT_EQ(store.snapshot_view().len(), usize(2));
+    ASSERT_TRUE(accept("d=four"_str, i64(101)));
+    EXPECT_EQ(store.revision(), Some(u64(4)));
+    EXPECT_EQ(store.snapshot_view()[usize()].cookie.name(), "c"_str);
+    ASSERT_TRUE(accept("c=gone; Max-Age=0"_str));
+    EXPECT_EQ(store.revision(), Some(u64(5)));
+    ASSERT_TRUE(accept("c=gone; Max-Age=0"_str));
+    EXPECT_EQ(store.revision(), Some(u64(5)));
+    ASSERT_TRUE(accept("d=four; Max-Age=1"_str));
+    EXPECT_EQ(store.snapshot(i64(101)).len(), usize());
+    EXPECT_EQ(store.revision(), Some(u64(7)));
+    store.expire(i64(101));
+    EXPECT_EQ(store.revision(), Some(u64(7)));
+    ASSERT_TRUE(accept("a=one; Max-Age=1"_str));
+    (void)store.export_netscape(i64(101));
+    EXPECT_EQ(store.revision(), Some(u64(9)));
+    ASSERT_TRUE(accept("a=one; Max-Age=1"_str));
+    store.expire(i64(101));
+    EXPECT_EQ(store.revision(), Some(u64(11)));
+}
+TEST(CookieStorage, RevisionIgnoresDisabledAndRejectedInsertions) {
+    CookieOptions options;
+    options.max_entries = usize();
+    CookieStorage disabled(rstd::move(options));
+    auto          url = Url::parse_http("https://example.test/"_str).unwrap();
+    EXPECT_TRUE(disabled.store(SetCookie::parse("sid=one"_str).unwrap(), url, i64(100)));
+    EXPECT_TRUE(disabled.replace_snapshot({}).is_ok());
+    EXPECT_EQ(disabled.revision(), Some(u64()));
+    CookieOptions limited;
+    limited.max_cookie_bytes = usize(1);
+    CookieStorage store(rstd::move(limited));
+    EXPECT_FALSE(store.store(SetCookie::parse("sid=one"_str).unwrap(), url, i64(100)));
+    EXPECT_EQ(store.revision(), Some(u64()));
+}
+TEST(CookieStorage, RevisionTracksRetainedDeletionOnlyOnce) {
+    CookieOptions options;
+    options.retain_expired_replacements = true;
+    CookieStorage store(rstd::move(options));
+    auto          url = Url::parse_http("https://example.test/"_str).unwrap();
+    ASSERT_TRUE(store.store(SetCookie::parse("sid=one"_str).unwrap(), url, i64(100)));
+    auto deleted = SetCookie::parse("sid=gone; Max-Age=0"_str).unwrap();
+    EXPECT_TRUE(store.store(deleted, url, i64(100)));
+    EXPECT_EQ(store.revision(), Some(u64(2)));
+    EXPECT_TRUE(store.store(deleted, url, i64(100)));
+    EXPECT_TRUE(
+        store.store(SetCookie::parse("absent=gone; Max-Age=0"_str).unwrap(), url, i64(100)));
+    EXPECT_EQ(store.revision(), Some(u64(2)));
+    EXPECT_EQ(store.snapshot_view()[usize()].cookie.value(), "one"_str);
+    auto precise                        = store.snapshot_all();
+    precise[usize()].expiry_nanoseconds = 1;
+    ASSERT_TRUE(store.replace_snapshot(rstd::move(precise)).is_ok());
+    EXPECT_TRUE(store.store(deleted, url, i64(100)));
+    EXPECT_EQ(store.revision(), Some(u64(4)));
+    EXPECT_EQ(store.snapshot_view()[usize()].expiry_nanoseconds, 0U);
+}
+TEST(CookieStorage, RevisionComparesFinalImportedContent) {
+    CookieStorage store;
+    auto          file = "example.test\tFALSE\t/\tFALSE\t0\tsid\tone\n"_str;
+    ASSERT_TRUE(store.import_netscape(file, i64(100)).is_ok());
+    EXPECT_EQ(store.revision(), Some(u64(1)));
+    EXPECT_TRUE(store.import_netscape(file, i64(100)).is_ok());
+    EXPECT_TRUE(store.import_netscape("# empty\n"_str, i64(100)).is_ok());
+    EXPECT_TRUE(store
+                    .import_netscape("example.test\tFALSE\t/\tFALSE\t0\tsid\ttemporary\n"
+                                     "example.test\tFALSE\t/\tFALSE\t0\tsid\tone\n"_str,
+                                     i64(100))
+                    .is_ok());
+    EXPECT_EQ(store.revision(), Some(u64(1)));
+    EXPECT_TRUE(
+        store.import_netscape("example.test\tFALSE\t/\tFALSE\t0\tsid\ttwo\ninvalid\n"_str, i64(100))
+            .is_err());
+    EXPECT_EQ(store.revision(), Some(u64(1)));
+    EXPECT_TRUE(store.import_netscape("example.test\tFALSE\t/\tFALSE\t0\tsid\ttwo\n"_str, i64(100))
+                    .is_ok());
+    EXPECT_EQ(store.revision(), Some(u64(2)));
+    EXPECT_TRUE(store.import_netscape("example.test\tFALSE\t/\tFALSE\t99\tsid\ttwo\n"_str, i64(100))
+                    .is_ok());
+    EXPECT_EQ(store.revision(), Some(u64(3)));
+    EXPECT_TRUE(store.snapshot_view().is_empty());
+}
 TEST(ResponseFields, ContentLengthRejectsDuplicateAndInvalidValues) {
     Headers fields;
     EXPECT_TRUE(content_length(fields).unwrap().is_none());

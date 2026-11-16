@@ -61,8 +61,11 @@ auto cookie_date(ref<str> text) -> Option<i64>;
 class CookieStorage {
     CookieOptions     options_;
     Vec<StoredCookie> entries_;
-    void              insert(StoredCookie cookie, i64 now);
+    Option<u64>       revision_ { Some(u64()) };
+    auto              insert(StoredCookie cookie, i64 now) -> bool;
     auto              allowed_domain(ref<str> domain) const -> bool;
+    void              content_changed();
+    void              replace_entries(Vec<StoredCookie> cookies);
 
 public:
     explicit CookieStorage(CookieOptions options = {}): options_(rstd::move(options)) {}
@@ -70,11 +73,17 @@ public:
     auto select(const Url& target, i64 now) -> CookieHeader;
     auto snapshot(i64 now) -> Vec<StoredCookie>;
     auto snapshot_all() const -> Vec<StoredCookie>;
+    // The view is invalidated by mutation or destruction of this storage.
+    auto snapshot_view() const [[clang::lifetimebound]] -> slice<StoredCookie> {
+        return entries_.as_slice();
+    }
+    // Storage-local content version; None stays disabled after exhaustion.
+    auto revision() const -> Option<u64> { return revision_; }
     // Restores trusted persisted state; a configured suffix policy is still enforced.
     auto replace_snapshot(Vec<StoredCookie> cookies) -> Result<empty, CookieFileError>;
     auto import_netscape(ref<str> input, i64 now) -> Result<empty, CookieFileError>;
     auto export_netscape(i64 now) -> String;
-    void clear() { entries_.clear(); }
+    void clear();
     auto erase(ref<str> domain, ref<str> path, ref<str> name) -> bool;
     void expire(i64 now);
 };

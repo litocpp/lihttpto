@@ -4,6 +4,27 @@ using namespace rstd::prelude;
 using namespace rstd::literals;
 namespace lihttpto
 {
+constexpr auto next_cookie_revision(Option<u64> revision) -> Option<u64> {
+    if (revision.is_none() || *revision == u64::MAX) return None();
+    return Some(*revision + u64(1));
+}
+static_assert(*next_cookie_revision(Some(u64())) == u64(1));
+static_assert(*next_cookie_revision(Some(u64::MAX - u64(1))) == u64::MAX);
+static_assert(next_cookie_revision(Some(u64(u64::MAX))).is_none());
+static_assert(next_cookie_revision(None()).is_none());
+auto same_cookie(const StoredCookie& a, const StoredCookie& b) -> bool {
+    return a.cookie.name() == b.cookie.name() && a.cookie.value() == b.cookie.value() &&
+           a.cookie.is_quoted() == b.cookie.is_quoted() && a.domain == b.domain &&
+           a.path == b.path && a.expires == b.expires && a.host_only == b.host_only &&
+           a.secure == b.secure && a.http_only == b.http_only && a.raw_cookie == b.raw_cookie &&
+           a.path_explicit == b.path_explicit && a.expiry_nanoseconds == b.expiry_nanoseconds;
+}
+auto same_cookies(slice<StoredCookie> a, slice<StoredCookie> b) -> bool {
+    if (a.len() != b.len()) return false;
+    for (usize i {}; i < a.len(); ++i)
+        if (! same_cookie(a[i], b[i])) return false;
+    return true;
+}
 auto cookie_expired(const StoredCookie& cookie, i64 now) -> bool {
     return cookie.expires.is_some() &&
            (*cookie.expires < now || (*cookie.expires == now && cookie.expiry_nanoseconds == 0));
@@ -53,48 +74,72 @@ auto CookieStorage::allowed_domain(ref<str> domain) const -> bool {
     return options_.suffixes.is_some() ? ! (*options_.suffixes)->is_public_suffix(domain)
                                        : options_.allow_unverified_suffixes;
 }
-void CookieStorage::expire(i64 now) {
-    for (usize i {}; i < entries_.len();) {
-        if (cookie_expired(entries_[i], now))
-            entries_.remove(i);
+auto expire_cookies(Vec<StoredCookie>& entries, i64 now) -> bool {
+    auto previous = entries.len();
+    for (usize i {}; i < entries.len();) {
+        if (cookie_expired(entries[i], now))
+            entries.remove(i);
         else
             ++i;
     }
+    return entries.len() != previous;
+}
+void CookieStorage::content_changed() {
+    revision_ = next_cookie_revision(revision_);
+}
+void CookieStorage::replace_entries(Vec<StoredCookie> cookies) {
+    if (same_cookies(snapshot_view(), cookies.as_slice())) return;
+    entries_ = rstd::move(cookies);
+    content_changed();
+}
+void CookieStorage::clear() {
+    if (entries_.is_empty()) return;
+    entries_.clear();
+    content_changed();
+}
+void CookieStorage::expire(i64 now) {
+    if (expire_cookies(entries_, now)) content_changed();
 }
 auto CookieStorage::erase(ref<str> domain, ref<str> path, ref<str> name) -> bool {
     for (usize i {}; i < entries_.len(); ++i)
         if (entries_[i].domain.as_str() == domain && entries_[i].path.as_str() == path &&
             entries_[i].cookie.name() == name) {
             entries_.remove(i);
+            content_changed();
             return true;
         }
     return false;
 }
-void CookieStorage::insert(StoredCookie cookie, i64 now) {
+auto CookieStorage::insert(StoredCookie cookie, i64 now) -> bool {
     if (cookie_expired(cookie, now)) {
-        if (options_.retain_expired_replacements) {
-            for (auto& old : entries_)
-                if (old.domain == cookie.domain && old.path == cookie.path &&
-                    old.cookie.name() == cookie.cookie.name()) {
+        for (usize i {}; i < entries_.len(); ++i) {
+            auto& old = entries_[i];
+            if (old.domain == cookie.domain && old.path == cookie.path &&
+                old.cookie.name() == cookie.cookie.name()) {
+                if (options_.retain_expired_replacements) {
+                    if (old.expires == Some(i64()) && old.expiry_nanoseconds == 0) return false;
                     old.expires            = Some(i64());
                     old.expiry_nanoseconds = 0;
-                    break;
+                } else {
+                    entries_.remove(i);
                 }
-        } else {
-            (void)erase(cookie.domain.as_str(), cookie.path.as_str(), cookie.cookie.name());
+                return true;
+            }
         }
-        return;
+        return false;
     }
     for (auto& old : entries_)
         if (old.domain == cookie.domain && old.path == cookie.path &&
             old.cookie.name() == cookie.cookie.name()) {
+            if (same_cookie(old, cookie)) return false;
             old = rstd::move(cookie);
-            return;
+            return true;
         }
-    if (options_.max_entries == usize()) return;
-    if (entries_.len() >= options_.max_entries) expire(now);
+    if (options_.max_entries == usize()) return false;
+    if (entries_.len() >= options_.max_entries) (void)expire_cookies(entries_, now);
     if (entries_.len() >= options_.max_entries) entries_.remove(usize());
     entries_.push(rstd::move(cookie));
+    return true;
 }
 auto CookieStorage::store(const SetCookie& input, const Url& origin, i64 now) -> bool {
     auto http = origin.http_origin();
@@ -157,7 +202,7 @@ auto CookieStorage::store(const SetCookie& input, const Url& origin, i64 now) ->
         if (options_.max_age_expiry.is_some() && *cookie.expires > *options_.max_age_expiry)
             cookie.expires = Some(*options_.max_age_expiry);
     }
-    insert(rstd::move(cookie), now);
+    if (insert(rstd::move(cookie), now)) content_changed();
     return true;
 }
 auto CookieStorage::select(const Url& target, i64 now) -> CookieHeader {
@@ -222,7 +267,7 @@ auto CookieStorage::replace_snapshot(Vec<StoredCookie> cookies) -> Result<empty,
                 cookies[j].cookie.name() == cookie.cookie.name())
                 return Err(CookieFileError(i + usize(1)));
     }
-    entries_ = rstd::move(cookies);
+    replace_entries(rstd::move(cookies));
     return Ok(empty {});
 }
 auto CookieStorage::export_netscape(i64 now) -> String {
@@ -293,7 +338,13 @@ auto CookieStorage::import_netscape(ref<str> input, i64 now) -> Result<empty, Co
                       secure == "TRUE"_str,
                       http_only });
     }
-    for (auto& cookie : parsed) insert(rstd::move(cookie), now);
+    if (! parsed.is_empty()) {
+        // Duplicate rows may change an entry and then restore its original content.
+        CookieStorage updated(options_.clone());
+        updated.entries_ = snapshot_all();
+        for (auto& cookie : parsed) (void)updated.insert(rstd::move(cookie), now);
+        replace_entries(rstd::move(updated.entries_));
+    }
     return Ok(empty {});
 }
 auto cookie_date(ref<str> text) -> Option<i64> {
