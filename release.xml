@@ -1,3 +1,14 @@
+<release version="0.1.4" date="2026-11-17">
+  <description>
+    <ul>
+      <li>Extend cache conditions and cookie snapshots with content revisions.</li>
+      <li>Add Url::to_file_path and QueryParams lossy form decoding.</li>
+      <li>Add owned Header construction and Debug support.</li>
+      <li>Allow custom headers in CONNECT requests.</li>
+      <li>Update rstd to 0.1.13.</li>
+    </ul>
+  </description>
+</release>
 <release version="0.1.3" date="2026-11-08">
   <description>
     <ul>
