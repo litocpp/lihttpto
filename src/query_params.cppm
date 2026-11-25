@@ -31,29 +31,27 @@ export class QueryIter : public DefaultInClass<QueryIter, Iterator> {
 public:
     using Item = ref<QueryPair>;
 
-    QueryIter(const QueryPair* current, const QueryPair* end) noexcept;
+    explicit QueryIter(slice<QueryPair> pairs) noexcept;
 
     [[nodiscard]]
     auto next() noexcept -> Option<Item>;
 
 private:
-    const QueryPair* current_;
-    const QueryPair* end_;
+    rstd::iter::SliceIter<QueryPair> pairs_;
 };
 
 export class QueryValues : public DefaultInClass<QueryValues, Iterator> {
 public:
     using Item = ref<str>;
 
-    QueryValues(const QueryPair* current, const QueryPair* end, const QueryPair* match) noexcept;
+    QueryValues(slice<QueryPair> pairs, ref<str> name) noexcept;
 
     [[nodiscard]]
     auto next() noexcept -> Option<Item>;
 
 private:
-    const QueryPair* current_;
-    const QueryPair* end_;
-    const QueryPair* match_;
+    QueryIter pairs_;
+    ref<str>  name_;
 };
 
 export class QueryParams : public DefaultInClass<QueryParams, Clone> {

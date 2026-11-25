@@ -76,7 +76,7 @@ TEST(HttpValues, QueryParamsPreserveOrderedRepeatedValues) {
     EXPECT_EQ(query.len().to_primitive(), 4u);
     EXPECT_EQ(*query.get("first"_str), "one"_str);
 
-    auto values = query.values("repeat"_str);
+    auto values = query.values(rstd::string::String::make("repeat"_str).as_str());
     auto first  = values.next();
     auto second = values.next();
     ASSERT_TRUE(first.is_some());
@@ -84,6 +84,7 @@ TEST(HttpValues, QueryParamsPreserveOrderedRepeatedValues) {
     EXPECT_EQ(*first, "a"_str);
     EXPECT_EQ(*second, "b c"_str);
     EXPECT_TRUE(values.next().is_none());
+    EXPECT_TRUE(query.values("missing"_str).next().is_none());
 
     EXPECT_EQ(query.encode_form().as_str(), "first=one&repeat=a&empty=&repeat=b+c"_str);
 

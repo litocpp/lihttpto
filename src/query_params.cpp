@@ -126,27 +126,21 @@ auto QueryPair::clone() const -> QueryPair {
     return QueryPair { name_.clone(), value_.clone() };
 }
 
-QueryIter::QueryIter(const QueryPair* current, const QueryPair* end) noexcept
-    : current_(current), end_(end) {
+QueryIter::QueryIter(slice<QueryPair> pairs) noexcept: pairs_(rstd::iter::from_slice(pairs)) {
 }
 
 auto QueryIter::next() noexcept -> Option<Item> {
-    if (current_ == end_) return None();
-    auto* value = current_++;
-    return Some(ref<QueryPair>::from_raw_parts(value));
+    return pairs_.next();
 }
 
-QueryValues::QueryValues(const QueryPair* current,
-                         const QueryPair* end,
-                         const QueryPair* match) noexcept
-    : current_(current), end_(end), match_(match) {
+QueryValues::QueryValues(slice<QueryPair> pairs, ref<str> name) noexcept
+    : pairs_(pairs), name_(name) {
 }
 
 auto QueryValues::next() noexcept -> Option<Item> {
-    if (match_ == nullptr) return None();
-    while (current_ != end_) {
-        auto* pair = current_++;
-        if (same(pair->name(), match_->name())) return Some(pair->value());
+    while (auto item = pairs_.next()) {
+        const auto& pair = **item;
+        if (same(pair.name(), name_)) return Some(pair.value());
     }
     return None();
 }
@@ -215,11 +209,10 @@ auto QueryParams::get(ref<str> name) const noexcept -> Option<ref<str>> {
 
 auto QueryParams::values(ref<str> name) const noexcept -> QueryValues {
     for (auto const& pair : pairs_) {
-        if (same(pair.name(), name)) {
-            return QueryValues { pairs_.begin(), pairs_.end(), &pair };
-        }
+        auto match = pair.name();
+        if (same(match, name)) return QueryValues { pairs_.as_slice(), match };
     }
-    return QueryValues { pairs_.end(), pairs_.end(), nullptr };
+    return QueryValues { {}, {} };
 }
 
 auto QueryParams::remove(ref<str> name) noexcept -> usize {
@@ -244,7 +237,7 @@ auto QueryParams::is_empty() const noexcept -> bool {
 }
 
 auto QueryParams::iter() const noexcept -> QueryIter {
-    return QueryIter { pairs_.begin(), pairs_.end() };
+    return QueryIter { pairs_.as_slice() };
 }
 
 auto QueryParams::encode_query() const -> String {

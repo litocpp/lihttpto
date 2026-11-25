@@ -152,14 +152,11 @@ auto Cookie::clone() const -> Cookie {
     return Cookie { name_.clone(), value_.clone(), quoted_ };
 }
 
-CookieIter::CookieIter(const Cookie* current, const Cookie* end) noexcept
-    : current_(current), end_(end) {
+CookieIter::CookieIter(slice<Cookie> cookies) noexcept: cookies_(rstd::iter::from_slice(cookies)) {
 }
 
 auto CookieIter::next() noexcept -> Option<Item> {
-    if (current_ == end_) return None();
-    auto* value = current_++;
-    return Some(ref<Cookie>::from_raw_parts(value));
+    return cookies_.next();
 }
 
 auto CookieHeader::parse(ref<str> input) -> rstd::Result<CookieHeader, CookieError> {
@@ -218,7 +215,7 @@ auto CookieHeader::is_empty() const noexcept -> bool {
 }
 
 auto CookieHeader::iter() const noexcept -> CookieIter {
-    return CookieIter { cookies_.begin(), cookies_.end() };
+    return CookieIter { cookies_.as_slice() };
 }
 
 auto CookieHeader::encode() const -> String {
@@ -258,15 +255,12 @@ auto CookieAttribute::clone() const -> CookieAttribute {
     return CookieAttribute { name_.clone(), value_.clone() };
 }
 
-CookieAttributeIter::CookieAttributeIter(const CookieAttribute* current,
-                                         const CookieAttribute* end) noexcept
-    : current_(current), end_(end) {
+CookieAttributeIter::CookieAttributeIter(slice<CookieAttribute> attributes) noexcept
+    : attributes_(rstd::iter::from_slice(attributes)) {
 }
 
 auto CookieAttributeIter::next() noexcept -> Option<Item> {
-    if (current_ == end_) return None();
-    auto* value = current_++;
-    return Some(ref<CookieAttribute>::from_raw_parts(value));
+    return attributes_.next();
 }
 
 SetCookie::SetCookie(Cookie cookie, Vec<CookieAttribute> attributes) noexcept
@@ -340,7 +334,7 @@ auto SetCookie::attribute(ref<str> name) const noexcept -> Option<ref<CookieAttr
 }
 
 auto SetCookie::attributes() const noexcept -> CookieAttributeIter {
-    return CookieAttributeIter { attributes_.begin(), attributes_.end() };
+    return CookieAttributeIter { attributes_.as_slice() };
 }
 
 auto SetCookie::secure() const noexcept -> bool {

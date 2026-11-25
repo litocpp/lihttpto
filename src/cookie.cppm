@@ -50,14 +50,13 @@ export class CookieIter : public DefaultInClass<CookieIter, Iterator> {
 public:
     using Item = ref<Cookie>;
 
-    CookieIter(const Cookie* current, const Cookie* end) noexcept;
+    explicit CookieIter(slice<Cookie> cookies) noexcept;
 
     [[nodiscard]]
     auto next() noexcept -> Option<Item>;
 
 private:
-    const Cookie* current_;
-    const Cookie* end_;
+    rstd::iter::SliceIter<Cookie> cookies_;
 };
 
 export class CookieHeader : public DefaultInClass<CookieHeader, Clone> {
@@ -126,14 +125,13 @@ export class CookieAttributeIter : public DefaultInClass<CookieAttributeIter, It
 public:
     using Item = ref<CookieAttribute>;
 
-    CookieAttributeIter(const CookieAttribute* current, const CookieAttribute* end) noexcept;
+    explicit CookieAttributeIter(slice<CookieAttribute> attributes) noexcept;
 
     [[nodiscard]]
     auto next() noexcept -> Option<Item>;
 
 private:
-    const CookieAttribute* current_;
-    const CookieAttribute* end_;
+    rstd::iter::SliceIter<CookieAttribute> attributes_;
 };
 
 export class SetCookie : public DefaultInClass<SetCookie, Clone> {
